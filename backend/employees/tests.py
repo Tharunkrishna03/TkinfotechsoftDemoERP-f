@@ -126,6 +126,40 @@ class EmployeeApiTests(TestCase):
         )
         return opening_stock, itemfolder
 
+    def create_cost_estimation_sheet(self):
+        create_response = self.client.post(
+            "/api/sales-service/",
+            self.sales_service_payload,
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        request_id = create_response.data["data"]["id"]
+
+        save_response = self.client.post(
+            "/api/cost-estimation/sheets/",
+            {
+                "salesServiceRequestId": request_id,
+                "taxPercentage": 18,
+                "profitMarginPercentage": 10,
+                "rows": [
+                    {
+                        "section": "raw_material",
+                        "itemName": "Lithium",
+                        "secondaryLabel": "Category",
+                        "secondaryValue": "Chemical",
+                        "unit": "kg",
+                        "rate": 1200,
+                        "quantity": 2,
+                        "total": 2400,
+                        "displayOrder": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(save_response.status_code, 201)
+        return save_response.data["data"]
+
     def test_add_item_creates_record(self):
         self.create_opening_stock_snapshot()
         response = self.client.post("/add-item/", self.item_payload, format="json")
@@ -291,6 +325,42 @@ class EmployeeApiTests(TestCase):
         self.assertIn("sales-service/", response.data["data"]["clientImage"])
         self.assertTrue(response.data["data"]["isActive"])
 
+    @override_settings(FILE_UPLOAD_MAX_MEMORY_SIZE=1)
+    def test_sales_service_explicit_multipart_create_and_update_accept_pdf_attachment(self):
+        large_pdf_content = b"%PDF-1.4\n" + (b"0" * 4096)
+
+        create_response = self.client.post(
+            "/api/sales-service/",
+            {
+                **self.sales_service_payload,
+                "clientImage": SimpleUploadedFile(
+                    "client-document.pdf",
+                    large_pdf_content,
+                    content_type="application/pdf",
+                ),
+            },
+            format="multipart",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self.assertIn("sales-service/", create_response.data["data"]["clientImage"])
+
+        request_id = create_response.data["data"]["id"]
+        update_response = self.client.put(
+            f"/api/sales-service/{request_id}/",
+            {
+                "clientName": "Updated Client",
+                "clientImage": SimpleUploadedFile(
+                    "updated-client-document.pdf",
+                    large_pdf_content,
+                    content_type="application/pdf",
+                ),
+            },
+            format="multipart",
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.data["clientName"], "Updated Client")
+        self.assertIn("sales-service/", update_response.data["clientImage"])
+
     def test_sales_service_list_returns_pdf_attachment_urls(self):
         create_response = self.client.post(
             "/api/sales-service/",
@@ -396,6 +466,21 @@ class EmployeeApiTests(TestCase):
         self.assertEqual(response.data["sections"]["raw_material"][0]["itemName"], "Lithium")
         self.assertEqual(response.data["sections"]["raw_material"][0]["secondaryValue"], "Chemical")
 
+    def test_cost_estimation_next_number_returns_first_number_for_request_year(self):
+        create_response = self.client.post(
+            "/api/sales-service/",
+            self.sales_service_payload,
+            format="json",
+        )
+        request_id = create_response.data["data"]["id"]
+
+        response = self.client.get(
+            "/api/cost-estimation/next-number/",
+            {"salesServiceRequestId": request_id},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["costEstimationNo"], "CST-26-0001")
+
     def test_cost_estimation_sheet_submit_saves_rows_and_computed_totals(self):
         create_response = self.client.post(
             "/api/sales-service/",
@@ -440,9 +525,11 @@ class EmployeeApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(CostEstimationSheet.objects.count(), 1)
         self.assertEqual(CostEstimationSheetRow.objects.count(), 2)
+        self.assertEqual(response.data["data"]["costEstimationNo"], "CST-26-0001")
 
         sheet = CostEstimationSheet.objects.get()
         self.assertEqual(sheet.salesServiceRequest_id, request_id)
+        self.assertEqual(sheet.costEstimationNo, "CST-26-0001")
         self.assertEqual(sheet.rawMaterialTotal, 2400)
         self.assertEqual(sheet.miscellaneousTotal, 500)
         self.assertEqual(sheet.subtotal, 2900)
@@ -450,6 +537,243 @@ class EmployeeApiTests(TestCase):
         self.assertEqual(sheet.profitMarginAmount, 290)
         self.assertEqual(sheet.finalBatteryCost, 3712)
         self.assertEqual(sheet.costPerUnit, 742.4)
+
+    def test_cost_estimation_sheet_list_returns_reference_and_client_details(self):
+        create_response = self.client.post(
+            "/api/sales-service/",
+            self.sales_service_payload,
+            format="json",
+        )
+        request_id = create_response.data["data"]["id"]
+
+        save_response = self.client.post(
+            "/api/cost-estimation/sheets/",
+            {
+                "salesServiceRequestId": request_id,
+                "taxPercentage": 18,
+                "profitMarginPercentage": 10,
+                "rows": [
+                    {
+                        "section": "raw_material",
+                        "itemName": "Lithium",
+                        "secondaryLabel": "Category",
+                        "secondaryValue": "Chemical",
+                        "unit": "kg",
+                        "rate": 1200,
+                        "quantity": 2,
+                        "total": 2400,
+                        "displayOrder": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(save_response.status_code, 201)
+
+        response = self.client.get("/api/cost-estimation/sheets/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["costEstimationNo"], "CST-26-0001")
+        self.assertEqual(response.data[0]["referenceNo"], "RF-26-0001")
+        self.assertEqual(response.data[0]["clientName"], "Arun Kumar")
+        self.assertEqual(response.data[0]["companyName"], "Acme Industries")
+        self.assertEqual(response.data[0]["phoneNo"], "9876543210")
+        self.assertEqual(len(response.data[0]["rows"]), 1)
+
+    def test_cost_estimation_sheet_detail_update_and_delete(self):
+        create_response = self.client.post(
+            "/api/sales-service/",
+            self.sales_service_payload,
+            format="json",
+        )
+        request_id = create_response.data["data"]["id"]
+
+        save_response = self.client.post(
+            "/api/cost-estimation/sheets/",
+            {
+                "salesServiceRequestId": request_id,
+                "taxPercentage": 18,
+                "profitMarginPercentage": 10,
+                "rows": [
+                    {
+                        "section": "raw_material",
+                        "itemName": "Lithium",
+                        "secondaryLabel": "Category",
+                        "secondaryValue": "Chemical",
+                        "unit": "kg",
+                        "rate": 1200,
+                        "quantity": 2,
+                        "total": 2400,
+                        "displayOrder": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(save_response.status_code, 201)
+        sheet_id = save_response.data["data"]["id"]
+
+        detail_response = self.client.get(f"/api/cost-estimation/sheets/{sheet_id}/")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.data["costEstimationNo"], "CST-26-0001")
+        self.assertEqual(detail_response.data["referenceNo"], "RF-26-0001")
+
+        update_response = self.client.put(
+            f"/api/cost-estimation/sheets/{sheet_id}/",
+            {
+                "salesServiceRequestId": request_id,
+                "taxPercentage": 5,
+                "profitMarginPercentage": 10,
+                "rows": [
+                    {
+                        "section": "raw_material",
+                        "itemName": "Lithium",
+                        "secondaryLabel": "Category",
+                        "secondaryValue": "Chemical",
+                        "unit": "kg",
+                        "rate": 100,
+                        "quantity": 3,
+                        "total": 300,
+                        "displayOrder": 1,
+                    },
+                    {
+                        "section": "miscellaneous",
+                        "itemName": "Assembly charge",
+                        "secondaryLabel": "",
+                        "secondaryValue": "",
+                        "unit": "job",
+                        "rate": 50,
+                        "quantity": 2,
+                        "total": 100,
+                        "displayOrder": 1,
+                    },
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.data["costEstimationNo"], "CST-26-0001")
+        self.assertEqual(update_response.data["subtotal"], 400)
+        self.assertEqual(update_response.data["taxAmount"], 20)
+        self.assertEqual(update_response.data["profitMarginAmount"], 40)
+        self.assertEqual(update_response.data["finalBatteryCost"], 460)
+        self.assertEqual(update_response.data["costPerUnit"], 92)
+        self.assertEqual(len(update_response.data["rows"]), 2)
+
+        delete_response = self.client.delete(f"/api/cost-estimation/sheets/{sheet_id}/")
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertFalse(CostEstimationSheet.objects.filter(id=sheet_id).exists())
+
+    def test_cost_estimation_workflow_send_to_head_and_review_filters(self):
+        sheet = self.create_cost_estimation_sheet()
+        sheet_id = sheet["id"]
+
+        send_response = self.client.post(f"/api/cost-estimation/sheets/{sheet_id}/send-to-head/")
+        self.assertEqual(send_response.status_code, 200)
+        self.assertTrue(send_response.data["data"]["sentToHead"])
+        self.assertEqual(
+            send_response.data["data"]["hodStatus"],
+            CostEstimationSheet.APPROVAL_PENDING,
+        )
+
+        hod_list_response = self.client.get("/api/cost-estimation/sheets/", {"workflow": "hod"})
+        self.assertEqual(hod_list_response.status_code, 200)
+        self.assertEqual(len(hod_list_response.data), 1)
+
+        md_list_response = self.client.get("/api/cost-estimation/sheets/", {"workflow": "md"})
+        self.assertEqual(md_list_response.status_code, 200)
+        self.assertEqual(len(md_list_response.data), 0)
+
+        hod_review_response = self.client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Approved by HOD",
+            },
+            format="json",
+        )
+        self.assertEqual(hod_review_response.status_code, 200)
+        self.assertEqual(hod_review_response.data["data"]["hodStatus"], "approved")
+        self.assertEqual(hod_review_response.data["data"]["hodComment"], "Approved by HOD")
+
+        md_list_response = self.client.get("/api/cost-estimation/sheets/", {"workflow": "md"})
+        self.assertEqual(md_list_response.status_code, 200)
+        self.assertEqual(len(md_list_response.data), 1)
+        self.assertEqual(md_list_response.data[0]["hodComment"], "Approved by HOD")
+
+        md_review_response = self.client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Approved by MD",
+            },
+            format="json",
+        )
+        self.assertEqual(md_review_response.status_code, 200)
+        self.assertEqual(md_review_response.data["data"]["mdStatus"], "approved")
+        self.assertEqual(md_review_response.data["data"]["overallStatus"], "approved")
+
+        base_list_response = self.client.get("/api/cost-estimation/sheets/")
+        self.assertEqual(base_list_response.status_code, 200)
+        self.assertEqual(base_list_response.data[0]["overallStatus"], "approved")
+        self.assertEqual(base_list_response.data[0]["hodComment"], "Approved by HOD")
+        self.assertEqual(base_list_response.data[0]["mdComment"], "Approved by MD")
+
+    def test_cost_estimation_update_resets_approval_workflow(self):
+        sheet = self.create_cost_estimation_sheet()
+        sheet_id = sheet["id"]
+        request_id = SalesServiceRequest.objects.get(referenceNo=sheet["referenceNo"]).id
+
+        self.client.post(f"/api/cost-estimation/sheets/{sheet_id}/send-to-head/")
+        self.client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Approved by HOD",
+            },
+            format="json",
+        )
+        self.client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Approved by MD",
+            },
+            format="json",
+        )
+
+        update_response = self.client.put(
+            f"/api/cost-estimation/sheets/{sheet_id}/",
+            {
+                "salesServiceRequestId": request_id,
+                "taxPercentage": 5,
+                "profitMarginPercentage": 10,
+                "rows": [
+                    {
+                        "section": "raw_material",
+                        "itemName": "Lithium",
+                        "secondaryLabel": "Category",
+                        "secondaryValue": "Chemical",
+                        "unit": "kg",
+                        "rate": 100,
+                        "quantity": 3,
+                        "total": 300,
+                        "displayOrder": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertFalse(update_response.data["sentToHead"])
+        self.assertEqual(update_response.data["hodStatus"], "pending")
+        self.assertEqual(update_response.data["mdStatus"], "pending")
+        self.assertEqual(update_response.data["hodComment"], "")
+        self.assertEqual(update_response.data["mdComment"], "")
 
     def test_opening_stock_snapshot_create_and_get_latest(self):
         itemfolder = ItemFolder.objects.create(**self.itemfolder_payload)

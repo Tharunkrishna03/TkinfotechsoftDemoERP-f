@@ -137,7 +137,12 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
         source="salesServiceRequest",
         write_only=True,
     )
+    costEstimationNo = serializers.CharField(read_only=True)
     referenceNo = serializers.CharField(source="salesServiceRequest.referenceNo", read_only=True)
+    clientName = serializers.CharField(source="salesServiceRequest.clientName", read_only=True)
+    companyName = serializers.CharField(source="salesServiceRequest.companyName", read_only=True)
+    phoneNo = serializers.CharField(source="salesServiceRequest.phoneNo", read_only=True)
+    overallStatus = serializers.SerializerMethodField()
     rows = CostEstimationSheetRowSerializer(many=True)
 
     class Meta:
@@ -145,7 +150,17 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "salesServiceRequestId",
+            "costEstimationNo",
             "referenceNo",
+            "clientName",
+            "companyName",
+            "phoneNo",
+            "sentToHead",
+            "hodStatus",
+            "hodComment",
+            "mdStatus",
+            "mdComment",
+            "overallStatus",
             "taxPercentage",
             "profitMarginPercentage",
             "rawMaterialTotal",
@@ -165,7 +180,17 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
         )
         read_only_fields = (
             "id",
+            "costEstimationNo",
             "referenceNo",
+            "clientName",
+            "companyName",
+            "phoneNo",
+            "sentToHead",
+            "hodStatus",
+            "hodComment",
+            "mdStatus",
+            "mdComment",
+            "overallStatus",
             "rawMaterialTotal",
             "processTotal",
             "laborTotal",
@@ -181,6 +206,9 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
             "created_at",
         )
 
+    def get_overallStatus(self, obj):
+        return obj.get_overall_status()
+
     def validate_rows(self, value):
         if not value:
             raise serializers.ValidationError("Add at least one cost estimation row.")
@@ -193,7 +221,7 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
 
         return value
 
-    def create(self, validated_data):
+    def _prepare_sheet_values(self, validated_data):
         rows_data = validated_data.pop("rows", [])
         sales_service_request = validated_data["salesServiceRequest"]
         totals_by_section = {
@@ -232,22 +260,26 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
         requested_quantity = float(getattr(sales_service_request, "quantity", 0) or 0)
         cost_per_unit = final_battery_cost / requested_quantity if requested_quantity > 0 else 0
 
-        sheet = CostEstimationSheet.objects.create(
-            **validated_data,
-            rawMaterialTotal=totals_by_section["raw_material"],
-            processTotal=totals_by_section["manufacturing"],
-            laborTotal=totals_by_section["labor"],
-            testingTotal=totals_by_section["testing"],
-            packagingTotal=totals_by_section["packaging"],
-            overheadTotal=totals_by_section["overhead"],
-            miscellaneousTotal=totals_by_section["miscellaneous"],
-            subtotal=subtotal,
-            taxAmount=tax_amount,
-            profitMarginAmount=profit_margin_amount,
-            finalBatteryCost=final_battery_cost,
-            costPerUnit=cost_per_unit,
+        return (
+            validated_data,
+            normalised_rows,
+            {
+                "rawMaterialTotal": totals_by_section["raw_material"],
+                "processTotal": totals_by_section["manufacturing"],
+                "laborTotal": totals_by_section["labor"],
+                "testingTotal": totals_by_section["testing"],
+                "packagingTotal": totals_by_section["packaging"],
+                "overheadTotal": totals_by_section["overhead"],
+                "miscellaneousTotal": totals_by_section["miscellaneous"],
+                "subtotal": subtotal,
+                "taxAmount": tax_amount,
+                "profitMarginAmount": profit_margin_amount,
+                "finalBatteryCost": final_battery_cost,
+                "costPerUnit": cost_per_unit,
+            },
         )
 
+    def _save_rows(self, sheet, normalised_rows):
         CostEstimationSheetRow.objects.bulk_create(
             [
                 CostEstimationSheetRow(
@@ -266,7 +298,67 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
             ]
         )
 
+    def create(self, validated_data):
+        validated_data, normalised_rows, computed_values = self._prepare_sheet_values(
+            validated_data,
+        )
+
+        sheet = CostEstimationSheet.objects.create(
+            **validated_data,
+            **computed_values,
+        )
+
+        self._save_rows(sheet, normalised_rows)
+
         return sheet
+
+    def update(self, instance, validated_data):
+        rows_data = validated_data.pop("rows", None)
+
+        if rows_data is None:
+            rows_data = [
+                {
+                    "section": row.section,
+                    "itemName": row.itemName,
+                    "secondaryLabel": row.secondaryLabel,
+                    "secondaryValue": row.secondaryValue,
+                    "unit": row.unit,
+                    "rate": row.rate,
+                    "quantity": row.quantity,
+                    "total": row.total,
+                    "displayOrder": row.displayOrder,
+                }
+                for row in instance.rows.all().order_by("displayOrder", "id")
+            ]
+
+        payload = {
+            "salesServiceRequest": validated_data.get(
+                "salesServiceRequest",
+                instance.salesServiceRequest,
+            ),
+            "taxPercentage": validated_data.get("taxPercentage", instance.taxPercentage),
+            "profitMarginPercentage": validated_data.get(
+                "profitMarginPercentage",
+                instance.profitMarginPercentage,
+            ),
+            "rows": rows_data,
+        }
+        payload, normalised_rows, computed_values = self._prepare_sheet_values(payload)
+
+        for field_name, field_value in {**payload, **computed_values}.items():
+            setattr(instance, field_name, field_value)
+
+        instance.sentToHead = False
+        instance.hodStatus = CostEstimationSheet.APPROVAL_PENDING
+        instance.hodComment = ""
+        instance.mdStatus = CostEstimationSheet.APPROVAL_PENDING
+        instance.mdComment = ""
+
+        instance.save()
+        instance.rows.all().delete()
+        self._save_rows(instance, normalised_rows)
+
+        return instance
 
 
 class OpeningStockRowSerializer(serializers.ModelSerializer):

@@ -15,7 +15,8 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
 from django.template.loader import render_to_string
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, parser_classes
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from xhtml2pdf import pisa
 
@@ -121,6 +122,7 @@ ITEMFOLDER_FIELDS = (
 ITEM_CODE_PREFIX = "BA-A01-"
 ITEM_CODE_PATTERN = re.compile(r"^BA-A01-(\d{4})$")
 RFQ_REFERENCE_PATTERN = re.compile(r"^RF-(\d{2})-(\d{4})$")
+COST_ESTIMATION_NUMBER_PATTERN = re.compile(r"^CST-(\d{2})-(\d{4})$")
 COST_ESTIMATION_SECTION_ORDER = (
     "raw_material",
     "manufacturing",
@@ -129,6 +131,7 @@ COST_ESTIMATION_SECTION_ORDER = (
     "packaging",
     "overhead",
 )
+SALES_SERVICE_PARSER_CLASSES = (MultiPartParser, FormParser, JSONParser)
 
 
 def _read(source, key, default=""):
@@ -246,6 +249,45 @@ def _parse_json_like(value, expected_type, default):
     return default
 
 
+def _copy_request_payload(request, file_field_names=()):
+    request_data = request.data
+    payload = {}
+    file_field_names = set(file_field_names)
+
+    if hasattr(request_data, "lists"):
+        for key, values in request_data.lists():
+            if key in file_field_names:
+                continue
+            if not values:
+                payload[key] = ""
+                continue
+            payload[key] = values[-1] if len(values) == 1 else values
+    elif hasattr(request_data, "items"):
+        payload = {
+            key: value
+            for key, value in request_data.items()
+            if key not in file_field_names
+        }
+    else:
+        payload = {
+            key: value
+            for key, value in dict(request_data).items()
+            if key not in file_field_names
+        }
+
+    for field_name in file_field_names:
+        uploaded_file = request.FILES.get(field_name)
+        if uploaded_file is not None:
+            payload[field_name] = uploaded_file
+            continue
+
+        raw_value = payload.get(field_name)
+        if raw_value in ("", None, "null", "undefined"):
+            payload.pop(field_name, None)
+
+    return payload
+
+
 def _generate_next_itemfolder_code():
     highest_suffix = 0
     existing_codes = ItemFolder.objects.filter(itemCode__startswith=ITEM_CODE_PREFIX).values_list(
@@ -294,6 +336,43 @@ def _generate_next_sales_service_reference(request_date=None):
         highest_suffix = max(highest_suffix, int(match.group(2)))
 
     return f"{reference_prefix}{highest_suffix + 1:04d}"
+
+
+def _resolve_cost_estimation_reference_date(request_date_value=None, sales_service_request_id=None):
+    parsed_date = _parse_iso_date(request_date_value)
+    if parsed_date is not None:
+        return parsed_date
+
+    request_id = _to_int(sales_service_request_id, None)
+    if request_id is not None and request_id > 0:
+        request_date = (
+            SalesServiceRequest.objects.filter(id=request_id)
+            .values_list("requestDate", flat=True)
+            .first()
+        )
+        if request_date is not None:
+            return request_date
+
+    return date.today()
+
+
+def _generate_next_cost_estimation_number(reference_date=None):
+    estimation_date = reference_date or date.today()
+    year_suffix = estimation_date.strftime("%y")
+    estimation_prefix = f"CST-{year_suffix}-"
+    highest_suffix = 0
+    existing_numbers = CostEstimationSheet.objects.filter(
+        costEstimationNo__startswith=estimation_prefix,
+    ).values_list("costEstimationNo", flat=True)
+
+    for cost_estimation_no in existing_numbers:
+        match = COST_ESTIMATION_NUMBER_PATTERN.match(str(cost_estimation_no or "").strip())
+        if not match or match.group(1) != year_suffix:
+            continue
+
+        highest_suffix = max(highest_suffix, int(match.group(2)))
+
+    return f"{estimation_prefix}{highest_suffix + 1:04d}"
 
 
 def _get_latest_opening_stock():
@@ -865,6 +944,7 @@ def sales_service_next_reference(request):
 
 
 @api_view(["GET", "POST"])
+@parser_classes(SALES_SERVICE_PARSER_CLASSES)
 def sales_service_collection(request):
     if request.method == "GET":
         sales_service_requests = SalesServiceRequest.objects.all().order_by("-created_at", "-id")
@@ -876,7 +956,7 @@ def sales_service_collection(request):
         return Response(serializer.data)
 
     request_date = _parse_iso_date(request.data.get("requestDate")) or date.today()
-    payload = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+    payload = _copy_request_payload(request, file_field_names=("clientImage",))
     payload["requestDate"] = request_date.isoformat()
     payload["referenceNo"] = _generate_next_sales_service_reference(request_date)
     if "isActive" not in payload:
@@ -897,6 +977,7 @@ def sales_service_collection(request):
 
 
 @api_view(["GET", "PUT", "DELETE"])
+@parser_classes(SALES_SERVICE_PARSER_CLASSES)
 def sales_service_detail(request, id):
     sales_service_request = get_object_or_404(SalesServiceRequest, id=id)
 
@@ -911,7 +992,7 @@ def sales_service_detail(request, id):
         sales_service_request.delete()
         return Response({"message": "Sales and service request deleted"})
 
-    payload = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+    payload = _copy_request_payload(request, file_field_names=("clientImage",))
     payload["referenceNo"] = sales_service_request.referenceNo
     if "isActive" not in payload:
         payload["isActive"] = sales_service_request.isActive
@@ -941,6 +1022,7 @@ def cost_estimation_catalog(request):
         .values(
             "id",
             "referenceNo",
+            "requestDate",
             "clientName",
             "companyName",
             "phoneNo",
@@ -968,12 +1050,53 @@ def cost_estimation_catalog(request):
     )
 
 
-@api_view(["POST"])
+@api_view(["GET"])
+def cost_estimation_next_number(request):
+    reference_date = _resolve_cost_estimation_reference_date(
+        request_date_value=request.query_params.get("requestDate"),
+        sales_service_request_id=request.query_params.get("salesServiceRequestId"),
+    )
+    return Response(
+        {
+            "costEstimationNo": _generate_next_cost_estimation_number(reference_date),
+        }
+    )
+
+
+def _get_cost_estimation_sheet_queryset(workflow=None):
+    queryset = (
+        CostEstimationSheet.objects.select_related("salesServiceRequest")
+        .prefetch_related("rows")
+    )
+    workflow = str(workflow or "").strip().lower()
+
+    if workflow == "hod":
+        queryset = queryset.filter(sentToHead=True)
+    elif workflow == "md":
+        queryset = queryset.filter(
+            sentToHead=True,
+            hodStatus=CostEstimationSheet.APPROVAL_APPROVED,
+        )
+
+    return queryset.order_by("-created_at", "-id")
+
+
+@api_view(["GET", "POST"])
 def cost_estimation_sheet_collection(request):
+    if request.method == "GET":
+        sheets = _get_cost_estimation_sheet_queryset(request.query_params.get("workflow"))
+        serializer = CostEstimationSheetSerializer(sheets, many=True)
+        return Response(serializer.data)
+
     serializer = CostEstimationSheetSerializer(data=request.data)
 
     if serializer.is_valid():
-        serializer.save()
+        reference_date = _resolve_cost_estimation_reference_date(
+            sales_service_request_id=request.data.get("salesServiceRequestId"),
+        )
+        serializer.save(
+            costEstimationNo=_generate_next_cost_estimation_number(reference_date),
+        )
         response_serializer = CostEstimationSheetSerializer(serializer.instance)
         return Response(
             {
@@ -984,6 +1107,141 @@ def cost_estimation_sheet_collection(request):
         )
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["GET", "PUT", "DELETE"])
+def cost_estimation_sheet_detail(request, id):
+    sheet = get_object_or_404(
+        CostEstimationSheet.objects.select_related("salesServiceRequest").prefetch_related("rows"),
+        id=id,
+    )
+
+    if request.method == "GET":
+        serializer = CostEstimationSheetSerializer(sheet)
+        return Response(serializer.data)
+
+    if request.method == "DELETE":
+        sheet.delete()
+        return Response({"message": "Cost estimation sheet deleted"})
+
+    serializer = CostEstimationSheetSerializer(sheet, data=request.data)
+
+    if serializer.is_valid():
+        serializer.save()
+        refreshed_sheet = (
+            CostEstimationSheet.objects.select_related("salesServiceRequest")
+            .prefetch_related("rows")
+            .filter(id=sheet.id)
+            .first()
+        )
+        response_serializer = CostEstimationSheetSerializer(refreshed_sheet)
+        return Response(response_serializer.data)
+
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+def cost_estimation_sheet_send_to_head(request, id):
+    sheet = get_object_or_404(
+        CostEstimationSheet.objects.select_related("salesServiceRequest").prefetch_related("rows"),
+        id=id,
+    )
+
+    sheet.sentToHead = True
+    sheet.hodStatus = CostEstimationSheet.APPROVAL_PENDING
+    sheet.hodComment = ""
+    sheet.mdStatus = CostEstimationSheet.APPROVAL_PENDING
+    sheet.mdComment = ""
+    sheet.save(
+        update_fields=[
+            "sentToHead",
+            "hodStatus",
+            "hodComment",
+            "mdStatus",
+            "mdComment",
+        ]
+    )
+
+    serializer = CostEstimationSheetSerializer(sheet)
+    return Response(
+        {
+            "message": "Cost estimation sheet sent to HOD successfully.",
+            "data": serializer.data,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+def cost_estimation_sheet_review(request, id):
+    sheet = get_object_or_404(
+        CostEstimationSheet.objects.select_related("salesServiceRequest").prefetch_related("rows"),
+        id=id,
+    )
+    stage = str(request.data.get("stage", "") or "").strip().lower()
+    approval_status = str(request.data.get("status", "") or "").strip().lower()
+    comment = str(request.data.get("comment", "") or "").strip()
+
+    if stage not in {"hod", "md"}:
+        return Response(
+            {"error": "Review stage must be hod or md."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if approval_status not in {
+        CostEstimationSheet.APPROVAL_APPROVED,
+        CostEstimationSheet.APPROVAL_DECLINED,
+    }:
+        return Response(
+            {"error": "Review status must be approved or declined."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not comment:
+        return Response(
+            {"comment": ["Comment is required."]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not sheet.sentToHead:
+        return Response(
+            {"error": "Send the cost estimation sheet to HOD before reviewing it."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    update_fields = []
+    stage_label = "HOD" if stage == "hod" else "MD"
+
+    if stage == "hod":
+        sheet.hodStatus = approval_status
+        sheet.hodComment = comment
+        update_fields.extend(["hodStatus", "hodComment"])
+
+        # A fresh HOD review always resets the MD stage so the latest version
+        # follows the approval sequence again.
+        sheet.mdStatus = CostEstimationSheet.APPROVAL_PENDING
+        sheet.mdComment = ""
+        update_fields.extend(["mdStatus", "mdComment"])
+    else:
+        if sheet.hodStatus != CostEstimationSheet.APPROVAL_APPROVED:
+            return Response(
+                {"error": "MD review is available only after HOD approval."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sheet.mdStatus = approval_status
+        sheet.mdComment = comment
+        update_fields.extend(["mdStatus", "mdComment"])
+
+    sheet.save(update_fields=update_fields)
+    serializer = CostEstimationSheetSerializer(sheet)
+    return Response(
+        {
+            "message": f"{stage_label} review saved successfully.",
+            "data": serializer.data,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET", "POST"])

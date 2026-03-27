@@ -154,11 +154,21 @@ class CostEstimationRate(models.Model):
 
 
 class CostEstimationSheet(models.Model):
+    APPROVAL_PENDING = "pending"
+    APPROVAL_APPROVED = "approved"
+    APPROVAL_DECLINED = "declined"
+    APPROVAL_STATUS_CHOICES = (
+        (APPROVAL_PENDING, "Pending"),
+        (APPROVAL_APPROVED, "Approved"),
+        (APPROVAL_DECLINED, "Declined"),
+    )
+
     salesServiceRequest = models.ForeignKey(
         SalesServiceRequest,
         on_delete=models.CASCADE,
         related_name="costEstimationSheets",
     )
+    costEstimationNo = models.CharField(max_length=20, unique=True)
     taxPercentage = models.FloatField(default=0)
     profitMarginPercentage = models.FloatField(default=0)
     rawMaterialTotal = models.FloatField(default=0)
@@ -173,13 +183,41 @@ class CostEstimationSheet(models.Model):
     profitMarginAmount = models.FloatField(default=0)
     finalBatteryCost = models.FloatField(default=0)
     costPerUnit = models.FloatField(default=0)
+    sentToHead = models.BooleanField(default=False)
+    hodStatus = models.CharField(
+        max_length=20,
+        choices=APPROVAL_STATUS_CHOICES,
+        default=APPROVAL_PENDING,
+    )
+    hodComment = models.TextField(blank=True, default="")
+    mdStatus = models.CharField(
+        max_length=20,
+        choices=APPROVAL_STATUS_CHOICES,
+        default=APPROVAL_PENDING,
+    )
+    mdComment = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ("-created_at", "-id")
 
     def __str__(self):
-        return f"{self.salesServiceRequest.referenceNo} - Cost Estimation {self.pk}"
+        return self.costEstimationNo or f"{self.salesServiceRequest.referenceNo} - Cost Estimation {self.pk}"
+
+    def get_overall_status(self):
+        if (
+            self.hodStatus == self.APPROVAL_APPROVED
+            and self.mdStatus == self.APPROVAL_APPROVED
+        ):
+            return self.APPROVAL_APPROVED
+
+        if (
+            self.hodStatus == self.APPROVAL_DECLINED
+            or self.mdStatus == self.APPROVAL_DECLINED
+        ):
+            return self.APPROVAL_DECLINED
+
+        return self.APPROVAL_PENDING
 
 
 class CostEstimationSheetRow(models.Model):

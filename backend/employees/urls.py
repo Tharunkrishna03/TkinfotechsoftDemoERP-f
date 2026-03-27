@@ -27,9 +27,29 @@ urlpatterns = [
         name="cost_estimation_catalog",
     ),
     path(
+        "api/cost-estimation/next-number/",
+        views.cost_estimation_next_number,
+        name="cost_estimation_next_number",
+    ),
+    path(
         "api/cost-estimation/sheets/",
         views.cost_estimation_sheet_collection,
         name="cost_estimation_sheet_collection",
+    ),
+    path(
+        "api/cost-estimation/sheets/<int:id>/",
+        views.cost_estimation_sheet_detail,
+        name="cost_estimation_sheet_detail",
+    ),
+    path(
+        "api/cost-estimation/sheets/<int:id>/send-to-head/",
+        views.cost_estimation_sheet_send_to_head,
+        name="cost_estimation_sheet_send_to_head",
+    ),
+    path(
+        "api/cost-estimation/sheets/<int:id>/review/",
+        views.cost_estimation_sheet_review,
+        name="cost_estimation_sheet_review",
     ),
     path("api/itemfolder/", views.itemfolder_collection, name="itemfolder_collection"),
     path("api/itemfolder/<int:id>/", views.itemfolder_detail, name="itemfolder_detail"),
