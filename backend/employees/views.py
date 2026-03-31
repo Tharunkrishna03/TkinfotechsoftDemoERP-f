@@ -10,7 +10,7 @@ from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.core import signing
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Prefetch, Q, Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
 from django.template.loader import render_to_string
@@ -28,6 +28,7 @@ from .models import (
     ItemFolder,
     OpeningStock,
     OpeningStockRow,
+    Quotation,
     SalesServiceRequest,
 )
 from .serializers import (
@@ -36,6 +37,7 @@ from .serializers import (
     DispatchSummarySerializer,
     ItemFolderSerializer,
     ItemSerializer,
+    QuotationSerializer,
     SalesServiceRequestSerializer,
 )
 
@@ -123,6 +125,7 @@ ITEM_CODE_PREFIX = "BA-A01-"
 ITEM_CODE_PATTERN = re.compile(r"^BA-A01-(\d{4})$")
 RFQ_REFERENCE_PATTERN = re.compile(r"^RF-(\d{2})-(\d{4})$")
 COST_ESTIMATION_NUMBER_PATTERN = re.compile(r"^CST-(\d{2})-(\d{4})$")
+QUOTATION_NUMBER_PATTERN = re.compile(r"^QUOTE-(\d{2})-(\d{4})$")
 COST_ESTIMATION_SECTION_ORDER = (
     "raw_material",
     "manufacturing",
@@ -132,6 +135,7 @@ COST_ESTIMATION_SECTION_ORDER = (
     "overhead",
 )
 SALES_SERVICE_PARSER_CLASSES = (MultiPartParser, FormParser, JSONParser)
+SALES_SERVICE_JSON_FIELDS = ("batteryServices", "manufacturingItems")
 
 
 def _read(source, key, default=""):
@@ -288,6 +292,18 @@ def _copy_request_payload(request, file_field_names=()):
     return payload
 
 
+def _normalise_sales_service_payload(payload):
+    for field_name in SALES_SERVICE_JSON_FIELDS:
+        if field_name in payload:
+            payload[field_name] = _parse_json_like(payload.get(field_name), list, [])
+
+    for field_name in ("modeOfContact", "requestType"):
+        if field_name in payload:
+            payload[field_name] = str(payload.get(field_name) or "").strip().lower()
+
+    return payload
+
+
 def _generate_next_itemfolder_code():
     highest_suffix = 0
     existing_codes = ItemFolder.objects.filter(itemCode__startswith=ITEM_CODE_PREFIX).values_list(
@@ -373,6 +389,93 @@ def _generate_next_cost_estimation_number(reference_date=None):
         highest_suffix = max(highest_suffix, int(match.group(2)))
 
     return f"{estimation_prefix}{highest_suffix + 1:04d}"
+
+
+def _generate_next_quotation_number(reference_date=None):
+    quotation_date = reference_date or date.today()
+    year_suffix = quotation_date.strftime("%y")
+    quotation_prefix = f"QUOTE-{year_suffix}-"
+    highest_suffix = 0
+    existing_numbers = Quotation.objects.filter(
+        quotationCode__startswith=quotation_prefix,
+    ).values_list("quotationCode", flat=True)
+
+    for quotation_code in existing_numbers:
+        match = QUOTATION_NUMBER_PATTERN.match(str(quotation_code or "").strip())
+        if not match or match.group(1) != year_suffix:
+            continue
+
+        highest_suffix = max(highest_suffix, int(match.group(2)))
+
+    return f"{quotation_prefix}{highest_suffix + 1:04d}"
+
+
+def _get_next_quotation_revision(sales_service_request_id):
+    latest_revision = (
+        Quotation.objects.filter(salesServiceRequest_id=sales_service_request_id)
+        .order_by("-revisedNo", "-id")
+        .values_list("revisedNo", flat=True)
+        .first()
+    )
+    return int(latest_revision or 0) + 1 if latest_revision is not None else 0
+
+
+def _get_latest_approved_cost_estimation(request_item):
+    if request_item is None:
+        return None
+
+    latest_sheet = next(iter(request_item.costEstimationSheets.all()), None)
+    if (
+        latest_sheet is not None
+        and latest_sheet.get_overall_status() == CostEstimationSheet.APPROVAL_APPROVED
+    ):
+        return latest_sheet
+    return None
+
+
+def _build_scope_details_for_quotation(request_item):
+    scope_details = [
+        line.strip()
+        for line in str(getattr(request_item, "scopeArea", "") or "").splitlines()
+        if line.strip()
+    ]
+
+    if not scope_details:
+        for battery_service in getattr(request_item, "batteryServices", []) or []:
+            service_label = str(battery_service or "").strip()
+            if service_label:
+                scope_details.append(service_label)
+
+    if not scope_details:
+        for manufacturing_item in getattr(request_item, "manufacturingItems", []) or []:
+            if not isinstance(manufacturing_item, dict):
+                continue
+
+            parts = [
+                str(manufacturing_item.get("itemName") or "").strip(),
+                str(manufacturing_item.get("quantity") or "").strip(),
+                str(manufacturing_item.get("unit") or "").strip(),
+            ]
+            label = " ".join(part for part in parts if part).strip()
+            if label:
+                scope_details.append(label)
+
+    if not scope_details:
+        parts = [
+            str(getattr(request_item, "itemName", "") or "").strip(),
+            str(getattr(request_item, "quantity", "") or "").strip(),
+            str(getattr(request_item, "unit", "") or "").strip(),
+        ]
+        label = " ".join(part for part in parts if part).strip()
+        if label:
+            scope_details.append(label)
+
+    unique_scope_details = []
+    for scope_detail in scope_details:
+        if scope_detail and scope_detail not in unique_scope_details:
+            unique_scope_details.append(scope_detail)
+
+    return unique_scope_details
 
 
 def _get_latest_opening_stock():
@@ -947,7 +1050,11 @@ def sales_service_next_reference(request):
 @parser_classes(SALES_SERVICE_PARSER_CLASSES)
 def sales_service_collection(request):
     if request.method == "GET":
-        sales_service_requests = SalesServiceRequest.objects.all().order_by("-created_at", "-id")
+        sales_service_requests = (
+            SalesServiceRequest.objects.filter(costEstimationSheets__isnull=True)
+            .distinct()
+            .order_by("-created_at", "-id")
+        )
         serializer = SalesServiceRequestSerializer(
             sales_service_requests,
             many=True,
@@ -956,7 +1063,9 @@ def sales_service_collection(request):
         return Response(serializer.data)
 
     request_date = _parse_iso_date(request.data.get("requestDate")) or date.today()
-    payload = _copy_request_payload(request, file_field_names=("clientImage",))
+    payload = _normalise_sales_service_payload(
+        _copy_request_payload(request, file_field_names=("clientImage",)),
+    )
     payload["requestDate"] = request_date.isoformat()
     payload["referenceNo"] = _generate_next_sales_service_reference(request_date)
     if "isActive" not in payload:
@@ -992,7 +1101,9 @@ def sales_service_detail(request, id):
         sales_service_request.delete()
         return Response({"message": "Sales and service request deleted"})
 
-    payload = _copy_request_payload(request, file_field_names=("clientImage",))
+    payload = _normalise_sales_service_payload(
+        _copy_request_payload(request, file_field_names=("clientImage",)),
+    )
     payload["referenceNo"] = sales_service_request.referenceNo
     if "isActive" not in payload:
         payload["isActive"] = sales_service_request.isActive
@@ -1016,8 +1127,21 @@ def sales_service_detail(request, id):
 
 @api_view(["GET"])
 def cost_estimation_catalog(request):
+    editing_sheet_id = _to_int(request.query_params.get("sheetId"), None)
+    reference_filters = Q(costEstimationSheets__isnull=True)
+
+    if editing_sheet_id is not None and editing_sheet_id > 0:
+        editing_request_id = (
+            CostEstimationSheet.objects.filter(id=editing_sheet_id)
+            .values_list("salesServiceRequest_id", flat=True)
+            .first()
+        )
+        if editing_request_id is not None:
+            reference_filters |= Q(id=editing_request_id)
+
     references = list(
-        SalesServiceRequest.objects.all()
+        SalesServiceRequest.objects.filter(reference_filters)
+        .distinct()
         .order_by("-created_at", "-id")
         .values(
             "id",
@@ -1066,19 +1190,38 @@ def cost_estimation_next_number(request):
 def _get_cost_estimation_sheet_queryset(workflow=None):
     queryset = (
         CostEstimationSheet.objects.select_related("salesServiceRequest")
-        .prefetch_related("rows")
+        .prefetch_related("rows", "quotations")
+        .order_by("-created_at", "-id")
     )
     workflow = str(workflow or "").strip().lower()
 
     if workflow == "hod":
-        queryset = queryset.filter(sentToHead=True)
+        latest_sheets = []
+        seen_request_ids = set()
+        for sheet in queryset.filter(
+            sentToHead=True,
+            hodStatus=CostEstimationSheet.APPROVAL_PENDING,
+        ):
+            if sheet.salesServiceRequest_id in seen_request_ids:
+                continue
+            seen_request_ids.add(sheet.salesServiceRequest_id)
+            latest_sheets.append(sheet)
+        return latest_sheets
     elif workflow == "md":
-        queryset = queryset.filter(
+        latest_sheets = []
+        seen_request_ids = set()
+        for sheet in queryset.filter(
             sentToHead=True,
             hodStatus=CostEstimationSheet.APPROVAL_APPROVED,
-        )
+            mdStatus=CostEstimationSheet.APPROVAL_PENDING,
+        ):
+            if sheet.salesServiceRequest_id in seen_request_ids:
+                continue
+            seen_request_ids.add(sheet.salesServiceRequest_id)
+            latest_sheets.append(sheet)
+        return latest_sheets
 
-    return queryset.order_by("-created_at", "-id")
+    return queryset
 
 
 @api_view(["GET", "POST"])
@@ -1121,6 +1264,13 @@ def cost_estimation_sheet_detail(request, id):
         return Response(serializer.data)
 
     if request.method == "DELETE":
+        if sheet.is_workflow_locked():
+            return Response(
+                {
+                    "error": "This cost estimation sheet is read only because it is already in approval, approved, or used in quotation."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         sheet.delete()
         return Response({"message": "Cost estimation sheet deleted"})
 
@@ -1146,6 +1296,20 @@ def cost_estimation_sheet_send_to_head(request, id):
         CostEstimationSheet.objects.select_related("salesServiceRequest").prefetch_related("rows"),
         id=id,
     )
+
+    if sheet.has_quotation():
+        return Response(
+            {"error": "Quoted cost estimation sheets cannot be sent for approval again."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if sheet.is_workflow_locked():
+        return Response(
+            {
+                "error": "This cost estimation sheet is already in approval or approved."
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     sheet.sentToHead = True
     sheet.hodStatus = CostEstimationSheet.APPROVAL_PENDING
@@ -1213,6 +1377,11 @@ def cost_estimation_sheet_review(request, id):
     stage_label = "HOD" if stage == "hod" else "MD"
 
     if stage == "hod":
+        if sheet.hodStatus != CostEstimationSheet.APPROVAL_PENDING:
+            return Response(
+                {"error": "HOD review is available only for waiting cost estimation sheets."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         sheet.hodStatus = approval_status
         sheet.hodComment = comment
         update_fields.extend(["hodStatus", "hodComment"])
@@ -1228,6 +1397,11 @@ def cost_estimation_sheet_review(request, id):
                 {"error": "MD review is available only after HOD approval."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if sheet.mdStatus != CostEstimationSheet.APPROVAL_PENDING:
+            return Response(
+                {"error": "MD review is available only for waiting cost estimation sheets."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         sheet.mdStatus = approval_status
         sheet.mdComment = comment
@@ -1241,6 +1415,97 @@ def cost_estimation_sheet_review(request, id):
             "data": serializer.data,
         },
         status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def quotation_catalog(request):
+    sales_service_requests = (
+        SalesServiceRequest.objects.filter(
+            costEstimationSheets__isnull=False,
+            quotations__isnull=True,
+        )
+        .distinct()
+        .prefetch_related(
+            Prefetch(
+                "costEstimationSheets",
+                queryset=CostEstimationSheet.objects.order_by("-created_at", "-id"),
+            ),
+        )
+        .order_by("-created_at", "-id")
+    )
+
+    request_rows = []
+    for request_item in sales_service_requests:
+        latest_cost_estimation = _get_latest_approved_cost_estimation(request_item)
+        if latest_cost_estimation is None:
+            continue
+
+        request_rows.append(
+            {
+                "id": request_item.id,
+                "referenceNo": request_item.referenceNo,
+                "requestDate": request_item.requestDate,
+                "clientName": request_item.clientName,
+                "companyName": request_item.companyName,
+                "phoneNo": request_item.phoneNo,
+                "email": request_item.email,
+                "scopeDetails": _build_scope_details_for_quotation(request_item),
+                "costEstimationSheetId": latest_cost_estimation.id,
+                "costEstimationNo": latest_cost_estimation.costEstimationNo,
+                "costEstimationTotal": latest_cost_estimation.finalBatteryCost,
+                "nextRevisionNo": 0,
+            }
+        )
+
+    return Response({"requests": request_rows}, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+def quotation_next_number(request):
+    quotation_date = _parse_iso_date(request.query_params.get("quotationDate")) or date.today()
+    return Response(
+        {
+            "quotationCode": _generate_next_quotation_number(quotation_date),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET", "POST"])
+def quotation_collection(request):
+    if request.method == "GET":
+        quotations = Quotation.objects.select_related(
+            "salesServiceRequest",
+            "costEstimationSheet",
+        ).all()
+        serializer = QuotationSerializer(quotations, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    serializer = QuotationSerializer(data=request.data)
+
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    sales_service_request = serializer.validated_data["salesServiceRequest"]
+    quotation_date = serializer.validated_data.get("quotationDate") or date.today()
+    currency = _normalise_currency(request.data.get("currency") or serializer.validated_data)
+    quotation = serializer.save(
+        quotationCode=_generate_next_quotation_number(quotation_date),
+        revisedNo=_get_next_quotation_revision(sales_service_request.id),
+        currencyName=currency["name"],
+        currencyCode=currency["code"],
+        currencySymbol=currency["symbol"],
+        currencyRateToInr=currency["rateToInr"],
+        currencyAmountLabel=currency["amountLabel"],
+    )
+    response_serializer = QuotationSerializer(quotation)
+    return Response(
+        {
+            "message": "Quotation saved successfully",
+            "data": response_serializer.data,
+        },
+        status=status.HTTP_201_CREATED,
     )
 
 

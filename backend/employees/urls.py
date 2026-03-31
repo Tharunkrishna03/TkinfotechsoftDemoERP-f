@@ -51,6 +51,21 @@ urlpatterns = [
         views.cost_estimation_sheet_review,
         name="cost_estimation_sheet_review",
     ),
+    path(
+        "api/quotation/catalog/",
+        views.quotation_catalog,
+        name="quotation_catalog",
+    ),
+    path(
+        "api/quotation/next-number/",
+        views.quotation_next_number,
+        name="quotation_next_number",
+    ),
+    path(
+        "api/quotation/",
+        views.quotation_collection,
+        name="quotation_collection",
+    ),
     path("api/itemfolder/", views.itemfolder_collection, name="itemfolder_collection"),
     path("api/itemfolder/<int:id>/", views.itemfolder_detail, name="itemfolder_detail"),
     path("api/opening-stock/", views.opening_stock_snapshot, name="opening_stock_snapshot"),
