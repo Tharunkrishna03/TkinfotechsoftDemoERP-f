@@ -174,6 +174,23 @@ class SalesServiceRequest(models.Model):
 
 
 class Quotation(models.Model):
+    APPROVAL_PENDING = "pending"
+    APPROVAL_APPROVED = "approved"
+    APPROVAL_DECLINED = "declined"
+    APPROVAL_STATUS_CHOICES = (
+        (APPROVAL_PENDING, "Pending"),
+        (APPROVAL_APPROVED, "Approved"),
+        (APPROVAL_DECLINED, "Declined"),
+    )
+    CLIENT_STATUS_PENDING = "pending"
+    CLIENT_STATUS_ACCEPTED = "accepted"
+    CLIENT_STATUS_REJECTED = "rejected"
+    CLIENT_STATUS_CHOICES = (
+        (CLIENT_STATUS_PENDING, "Pending"),
+        (CLIENT_STATUS_ACCEPTED, "Accepted"),
+        (CLIENT_STATUS_REJECTED, "Rejected"),
+    )
+
     salesServiceRequest = models.ForeignKey(
         SalesServiceRequest,
         on_delete=models.CASCADE,
@@ -190,12 +207,17 @@ class Quotation(models.Model):
     quotationDate = models.DateField()
     expiryDate = models.DateField()
     quoteValidityDays = models.PositiveIntegerField(default=12)
-    revisedNo = models.PositiveIntegerField(default=0)
+    # Keep the API/frontend field name while matching the migrated DB column.
+    revisedNo = models.PositiveIntegerField(default=0, db_column="revisionNo")
     attentionName = models.CharField(max_length=120)
     companyName = models.CharField(max_length=160, blank=True, default="")
     referenceNo = models.CharField(max_length=20, blank=True, default="")
     costEstimationNo = models.CharField(max_length=20, blank=True, default="")
     scopeDetails = models.JSONField(blank=True, default=list)
+    rfqScope = models.JSONField(blank=True, default=list)
+    rfqRemarks = models.TextField(blank=True, default="")
+    rfqContactMode = models.CharField(max_length=20, blank=True, default="")
+    costBreakdown = models.JSONField(blank=True, default=dict)
     totalCost = models.FloatField(default=0)
     paymentTermsType = models.CharField(max_length=80, blank=True, default="")
     paymentTerms = models.TextField(blank=True, default="")
@@ -208,6 +230,25 @@ class Quotation(models.Model):
     currencySymbol = models.CharField(max_length=10, default="\u20b9")
     currencyRateToInr = models.FloatField(default=1)
     currencyAmountLabel = models.CharField(max_length=50, default="Rupees")
+    sentToHead = models.BooleanField(default=False)
+    hodStatus = models.CharField(
+        max_length=20,
+        choices=APPROVAL_STATUS_CHOICES,
+        default=APPROVAL_PENDING,
+    )
+    hodComment = models.TextField(blank=True, default="")
+    mdStatus = models.CharField(
+        max_length=20,
+        choices=APPROVAL_STATUS_CHOICES,
+        default=APPROVAL_PENDING,
+    )
+    mdComment = models.TextField(blank=True, default="")
+    clientStatus = models.CharField(
+        max_length=20,
+        choices=CLIENT_STATUS_CHOICES,
+        default=CLIENT_STATUS_PENDING,
+    )
+    clientComment = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -307,7 +348,6 @@ class CostEstimationSheet(models.Model):
             return self.APPROVAL_DECLINED
 
         return self.APPROVAL_PENDING
-<<<<<<< HEAD
 
     def has_quotation(self):
         prefetched_objects = getattr(self, "_prefetched_objects_cache", {})
@@ -331,8 +371,6 @@ class CostEstimationSheet(models.Model):
             return True
 
         return self.sentToHead and overall_status == self.APPROVAL_PENDING
-=======
->>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 
 
 class CostEstimationSheetRow(models.Model):

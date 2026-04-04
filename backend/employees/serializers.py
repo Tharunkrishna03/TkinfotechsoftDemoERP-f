@@ -497,6 +497,7 @@ class QuotationSerializer(serializers.ModelSerializer):
     totalCost = serializers.FloatField(required=False)
     quoteValidityDays = BlankableIntegerField(required=False, allow_null=True, min_value=0)
     revisedNo = BlankableIntegerField(required=False, allow_null=True, min_value=0)
+    revisionNo = serializers.IntegerField(source="revisedNo", read_only=True)
     paymentTermsType = serializers.CharField(required=False, allow_blank=True)
     paymentTerms = serializers.CharField(required=False, allow_blank=True)
     deliveryTermsType = serializers.CharField(required=False, allow_blank=True)
@@ -515,6 +516,11 @@ class QuotationSerializer(serializers.ModelSerializer):
             "created_at",
             "salesServiceRequest",
             "costEstimationSheet",
+            "revisionNo",
+            "rfqScope",
+            "rfqRemarks",
+            "rfqContactMode",
+            "costBreakdown",
         )
 
     def _get_existing_value(self, field_name, default=None):
@@ -576,6 +582,90 @@ class QuotationSerializer(serializers.ModelSerializer):
         ):
             return latest_sheet
         return None
+
+    def _build_rfq_scope_snapshot(self, request_item):
+        if request_item is None:
+            return []
+
+        scope_snapshot = _split_non_empty_lines(getattr(request_item, "scopeArea", ""))
+
+        if not scope_snapshot:
+            for battery_service in getattr(request_item, "batteryServices", []) or []:
+                service_label = _stringify(battery_service)
+                if service_label:
+                    scope_snapshot.append(service_label)
+
+        if (
+            not scope_snapshot
+            and getattr(request_item, "requestType", "") == SalesServiceRequest.REQUEST_TYPE_MANUFACTURING
+        ):
+            for manufacturing_item in getattr(request_item, "manufacturingItems", []) or []:
+                if not isinstance(manufacturing_item, dict):
+                    continue
+
+                label = " ".join(
+                    part
+                    for part in (
+                        _stringify(manufacturing_item.get("itemName")),
+                        _stringify(manufacturing_item.get("quantity")),
+                        _stringify(manufacturing_item.get("unit")),
+                    )
+                    if part
+                ).strip()
+                if label:
+                    scope_snapshot.append(label)
+
+        if not scope_snapshot:
+            label = " ".join(
+                part
+                for part in (
+                    _stringify(getattr(request_item, "itemName", "")),
+                    _stringify(getattr(request_item, "quantity", "")),
+                    _stringify(getattr(request_item, "unit", "")),
+                )
+                if part
+            ).strip()
+            if label:
+                scope_snapshot.append(label)
+
+        return scope_snapshot
+
+    def _build_cost_breakdown_snapshot(self, sheet, total_cost):
+        if sheet is None:
+            fallback_total = float(total_cost or 0)
+            return {
+                "rawMaterialTotal": 0,
+                "processTotal": 0,
+                "laborTotal": 0,
+                "testingTotal": 0,
+                "packagingTotal": 0,
+                "overheadTotal": 0,
+                "miscellaneousTotal": 0,
+                "subtotal": fallback_total,
+                "taxPercentage": 0,
+                "taxAmount": 0,
+                "profitMarginPercentage": 0,
+                "profitMarginAmount": 0,
+                "finalBatteryCost": fallback_total,
+                "costPerUnit": 0,
+            }
+
+        return {
+            "rawMaterialTotal": float(sheet.rawMaterialTotal or 0),
+            "processTotal": float(sheet.processTotal or 0),
+            "laborTotal": float(sheet.laborTotal or 0),
+            "testingTotal": float(sheet.testingTotal or 0),
+            "packagingTotal": float(sheet.packagingTotal or 0),
+            "overheadTotal": float(sheet.overheadTotal or 0),
+            "miscellaneousTotal": float(sheet.miscellaneousTotal or 0),
+            "subtotal": float(sheet.subtotal or 0),
+            "taxPercentage": float(sheet.taxPercentage or 0),
+            "taxAmount": float(sheet.taxAmount or 0),
+            "profitMarginPercentage": float(sheet.profitMarginPercentage or 0),
+            "profitMarginAmount": float(sheet.profitMarginAmount or 0),
+            "finalBatteryCost": float(sheet.finalBatteryCost or 0),
+            "costPerUnit": float(sheet.costPerUnit or 0),
+        }
 
     def validate(self, attrs):
         sales_service_request = attrs.get(
@@ -703,6 +793,17 @@ class QuotationSerializer(serializers.ModelSerializer):
         attrs["termsType"] = terms_type
         attrs["terms"] = terms
         attrs["totalCost"] = float(total_cost or 0)
+        attrs["rfqScope"] = self._build_rfq_scope_snapshot(sales_service_request)
+        attrs["rfqRemarks"] = _stringify(
+            getattr(sales_service_request, "planningRemarks", ""),
+        )
+        attrs["rfqContactMode"] = _stringify(
+            getattr(sales_service_request, "modeOfContact", ""),
+        )
+        attrs["costBreakdown"] = self._build_cost_breakdown_snapshot(
+            cost_estimation_sheet,
+            attrs["totalCost"],
+        )
 
         if sales_service_request is not None:
             attrs["attentionName"] = _stringify(sales_service_request.clientName)
@@ -754,11 +855,8 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
     companyName = serializers.CharField(source="salesServiceRequest.companyName", read_only=True)
     phoneNo = serializers.CharField(source="salesServiceRequest.phoneNo", read_only=True)
     overallStatus = serializers.SerializerMethodField()
-<<<<<<< HEAD
     isReadOnly = serializers.SerializerMethodField()
     isQuoted = serializers.SerializerMethodField()
-=======
->>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     rows = CostEstimationSheetRowSerializer(many=True)
 
     class Meta:
@@ -777,11 +875,8 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
             "mdStatus",
             "mdComment",
             "overallStatus",
-<<<<<<< HEAD
             "isReadOnly",
             "isQuoted",
-=======
->>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
             "taxPercentage",
             "profitMarginPercentage",
             "rawMaterialTotal",
@@ -812,11 +907,8 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
             "mdStatus",
             "mdComment",
             "overallStatus",
-<<<<<<< HEAD
             "isReadOnly",
             "isQuoted",
-=======
->>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
             "rawMaterialTotal",
             "processTotal",
             "laborTotal",
@@ -835,15 +927,11 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
     def get_overallStatus(self, obj):
         return obj.get_overall_status()
 
-<<<<<<< HEAD
     def get_isReadOnly(self, obj):
         return obj.is_locked_for_editing()
 
     def get_isQuoted(self, obj):
         return obj.has_quotation()
-
-=======
->>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     def validate_rows(self, value):
         if not value:
             raise serializers.ValidationError("Add at least one cost estimation row.")
@@ -856,7 +944,6 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
 
         return value
 
-<<<<<<< HEAD
     def validate(self, attrs):
         sales_service_request = attrs.get(
             "salesServiceRequest",
@@ -898,9 +985,6 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
-
-=======
->>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     def _prepare_sheet_values(self, validated_data):
         rows_data = validated_data.pop("rows", [])
         sales_service_request = validated_data["salesServiceRequest"]
