@@ -754,8 +754,11 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
     companyName = serializers.CharField(source="salesServiceRequest.companyName", read_only=True)
     phoneNo = serializers.CharField(source="salesServiceRequest.phoneNo", read_only=True)
     overallStatus = serializers.SerializerMethodField()
+<<<<<<< HEAD
     isReadOnly = serializers.SerializerMethodField()
     isQuoted = serializers.SerializerMethodField()
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     rows = CostEstimationSheetRowSerializer(many=True)
 
     class Meta:
@@ -774,8 +777,11 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
             "mdStatus",
             "mdComment",
             "overallStatus",
+<<<<<<< HEAD
             "isReadOnly",
             "isQuoted",
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
             "taxPercentage",
             "profitMarginPercentage",
             "rawMaterialTotal",
@@ -806,8 +812,11 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
             "mdStatus",
             "mdComment",
             "overallStatus",
+<<<<<<< HEAD
             "isReadOnly",
             "isQuoted",
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
             "rawMaterialTotal",
             "processTotal",
             "laborTotal",
@@ -826,12 +835,15 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
     def get_overallStatus(self, obj):
         return obj.get_overall_status()
 
+<<<<<<< HEAD
     def get_isReadOnly(self, obj):
         return obj.is_locked_for_editing()
 
     def get_isQuoted(self, obj):
         return obj.has_quotation()
 
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     def validate_rows(self, value):
         if not value:
             raise serializers.ValidationError("Add at least one cost estimation row.")
@@ -844,6 +856,7 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
 
         return value
 
+<<<<<<< HEAD
     def validate(self, attrs):
         sales_service_request = attrs.get(
             "salesServiceRequest",
@@ -886,6 +899,8 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
 
         return attrs
 
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     def _prepare_sheet_values(self, validated_data):
         rows_data = validated_data.pop("rows", [])
         sales_service_request = validated_data["salesServiceRequest"]

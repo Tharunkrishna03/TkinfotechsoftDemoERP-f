@@ -51,6 +51,7 @@ urlpatterns = [
         views.cost_estimation_sheet_review,
         name="cost_estimation_sheet_review",
     ),
+<<<<<<< HEAD
     path(
         "api/quotation/catalog/",
         views.quotation_catalog,
@@ -66,6 +67,8 @@ urlpatterns = [
         views.quotation_collection,
         name="quotation_collection",
     ),
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     path("api/itemfolder/", views.itemfolder_collection, name="itemfolder_collection"),
     path("api/itemfolder/<int:id>/", views.itemfolder_detail, name="itemfolder_detail"),
     path("api/opening-stock/", views.opening_stock_snapshot, name="opening_stock_snapshot"),

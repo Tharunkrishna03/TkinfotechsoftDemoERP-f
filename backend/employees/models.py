@@ -307,6 +307,7 @@ class CostEstimationSheet(models.Model):
             return self.APPROVAL_DECLINED
 
         return self.APPROVAL_PENDING
+<<<<<<< HEAD
 
     def has_quotation(self):
         prefetched_objects = getattr(self, "_prefetched_objects_cache", {})
@@ -330,6 +331,8 @@ class CostEstimationSheet(models.Model):
             return True
 
         return self.sentToHead and overall_status == self.APPROVAL_PENDING
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 
 
 class CostEstimationSheetRow(models.Model):

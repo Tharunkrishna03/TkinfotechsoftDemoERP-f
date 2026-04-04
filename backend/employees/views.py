@@ -125,7 +125,10 @@ ITEM_CODE_PREFIX = "BA-A01-"
 ITEM_CODE_PATTERN = re.compile(r"^BA-A01-(\d{4})$")
 RFQ_REFERENCE_PATTERN = re.compile(r"^RF-(\d{2})-(\d{4})$")
 COST_ESTIMATION_NUMBER_PATTERN = re.compile(r"^CST-(\d{2})-(\d{4})$")
+<<<<<<< HEAD
 QUOTATION_NUMBER_PATTERN = re.compile(r"^QUOTE-(\d{2})-(\d{4})$")
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 COST_ESTIMATION_SECTION_ORDER = (
     "raw_material",
     "manufacturing",
@@ -135,7 +138,10 @@ COST_ESTIMATION_SECTION_ORDER = (
     "overhead",
 )
 SALES_SERVICE_PARSER_CLASSES = (MultiPartParser, FormParser, JSONParser)
+<<<<<<< HEAD
 SALES_SERVICE_JSON_FIELDS = ("batteryServices", "manufacturingItems")
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 
 
 def _read(source, key, default=""):
@@ -292,6 +298,7 @@ def _copy_request_payload(request, file_field_names=()):
     return payload
 
 
+<<<<<<< HEAD
 def _normalise_sales_service_payload(payload):
     for field_name in SALES_SERVICE_JSON_FIELDS:
         if field_name in payload:
@@ -304,6 +311,8 @@ def _normalise_sales_service_payload(payload):
     return payload
 
 
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 def _generate_next_itemfolder_code():
     highest_suffix = 0
     existing_codes = ItemFolder.objects.filter(itemCode__startswith=ITEM_CODE_PREFIX).values_list(
@@ -391,6 +400,7 @@ def _generate_next_cost_estimation_number(reference_date=None):
     return f"{estimation_prefix}{highest_suffix + 1:04d}"
 
 
+<<<<<<< HEAD
 def _generate_next_quotation_number(reference_date=None):
     quotation_date = reference_date or date.today()
     year_suffix = quotation_date.strftime("%y")
@@ -478,6 +488,8 @@ def _build_scope_details_for_quotation(request_item):
     return unique_scope_details
 
 
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 def _get_latest_opening_stock():
     return (
         OpeningStock.objects.prefetch_related("rows__item")
@@ -1063,9 +1075,13 @@ def sales_service_collection(request):
         return Response(serializer.data)
 
     request_date = _parse_iso_date(request.data.get("requestDate")) or date.today()
+<<<<<<< HEAD
     payload = _normalise_sales_service_payload(
         _copy_request_payload(request, file_field_names=("clientImage",)),
     )
+=======
+    payload = _copy_request_payload(request, file_field_names=("clientImage",))
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     payload["requestDate"] = request_date.isoformat()
     payload["referenceNo"] = _generate_next_sales_service_reference(request_date)
     if "isActive" not in payload:
@@ -1101,9 +1117,13 @@ def sales_service_detail(request, id):
         sales_service_request.delete()
         return Response({"message": "Sales and service request deleted"})
 
+<<<<<<< HEAD
     payload = _normalise_sales_service_payload(
         _copy_request_payload(request, file_field_names=("clientImage",)),
     )
+=======
+    payload = _copy_request_payload(request, file_field_names=("clientImage",))
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     payload["referenceNo"] = sales_service_request.referenceNo
     if "isActive" not in payload:
         payload["isActive"] = sales_service_request.isActive
@@ -1190,12 +1210,17 @@ def cost_estimation_next_number(request):
 def _get_cost_estimation_sheet_queryset(workflow=None):
     queryset = (
         CostEstimationSheet.objects.select_related("salesServiceRequest")
+<<<<<<< HEAD
         .prefetch_related("rows", "quotations")
         .order_by("-created_at", "-id")
+=======
+        .prefetch_related("rows")
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     )
     workflow = str(workflow or "").strip().lower()
 
     if workflow == "hod":
+<<<<<<< HEAD
         latest_sheets = []
         seen_request_ids = set()
         for sheet in queryset.filter(
@@ -1222,6 +1247,16 @@ def _get_cost_estimation_sheet_queryset(workflow=None):
         return latest_sheets
 
     return queryset
+=======
+        queryset = queryset.filter(sentToHead=True)
+    elif workflow == "md":
+        queryset = queryset.filter(
+            sentToHead=True,
+            hodStatus=CostEstimationSheet.APPROVAL_APPROVED,
+        )
+
+    return queryset.order_by("-created_at", "-id")
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 
 
 @api_view(["GET", "POST"])
@@ -1264,6 +1299,7 @@ def cost_estimation_sheet_detail(request, id):
         return Response(serializer.data)
 
     if request.method == "DELETE":
+<<<<<<< HEAD
         if sheet.is_workflow_locked():
             return Response(
                 {
@@ -1271,6 +1307,8 @@ def cost_estimation_sheet_detail(request, id):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
         sheet.delete()
         return Response({"message": "Cost estimation sheet deleted"})
 
@@ -1297,6 +1335,7 @@ def cost_estimation_sheet_send_to_head(request, id):
         id=id,
     )
 
+<<<<<<< HEAD
     if sheet.has_quotation():
         return Response(
             {"error": "Quoted cost estimation sheets cannot be sent for approval again."},
@@ -1311,6 +1350,8 @@ def cost_estimation_sheet_send_to_head(request, id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
     sheet.sentToHead = True
     sheet.hodStatus = CostEstimationSheet.APPROVAL_PENDING
     sheet.hodComment = ""
@@ -1377,11 +1418,14 @@ def cost_estimation_sheet_review(request, id):
     stage_label = "HOD" if stage == "hod" else "MD"
 
     if stage == "hod":
+<<<<<<< HEAD
         if sheet.hodStatus != CostEstimationSheet.APPROVAL_PENDING:
             return Response(
                 {"error": "HOD review is available only for waiting cost estimation sheets."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
         sheet.hodStatus = approval_status
         sheet.hodComment = comment
         update_fields.extend(["hodStatus", "hodComment"])
@@ -1397,11 +1441,14 @@ def cost_estimation_sheet_review(request, id):
                 {"error": "MD review is available only after HOD approval."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+<<<<<<< HEAD
         if sheet.mdStatus != CostEstimationSheet.APPROVAL_PENDING:
             return Response(
                 {"error": "MD review is available only for waiting cost estimation sheets."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 
         sheet.mdStatus = approval_status
         sheet.mdComment = comment
@@ -1418,6 +1465,7 @@ def cost_estimation_sheet_review(request, id):
     )
 
 
+<<<<<<< HEAD
 @api_view(["GET"])
 def quotation_catalog(request):
     sales_service_requests = (
@@ -1509,6 +1557,8 @@ def quotation_collection(request):
     )
 
 
+=======
+>>>>>>> ef6468f3b156de598fa9193d2329e1623f4fbb45
 @api_view(["GET", "POST"])
 def opening_stock_snapshot(request):
     if request.method == "GET":
