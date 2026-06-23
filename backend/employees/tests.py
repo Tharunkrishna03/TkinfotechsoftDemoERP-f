@@ -2,8 +2,11 @@ import json
 from io import StringIO
 from datetime import date
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.template.loader import render_to_string
 from rest_framework.test import APIClient
@@ -15,18 +18,49 @@ from .models import (
     DispatchSummary,
     Item,
     ItemFolder,
+    JobCard,
+    OperationRegister,
     OpeningStock,
     OpeningStockRow,
+    PurchaseOrder,
     Quotation,
     SalesServiceRequest,
 )
 from .views import _build_invoice_context
+from .views import (
+    ROLE_DOCUMENT_CONTROLLER,
+    ROLE_HOD,
+    ROLE_LEAD_SALES,
+    ROLE_MD,
+    ROLE_OPERATION_HEAD,
+    ROLE_SALES_EXECUTIVE,
+    ROLE_SITE_ENGINEER,
+    _build_admin_auth_payload,
+)
+
+
+class BackendSettingsTests(SimpleTestCase):
+    def test_default_allowed_hosts_include_common_development_hosts(self):
+        for host in ("127.0.0.1", "localhost", "testserver"):
+            self.assertIn(host, settings.ALLOWED_HOSTS)
+
+    def test_store_manager_default_credentials_use_storemanager_name(self):
+        self.assertEqual(settings.DEFAULT_OPERATION_HEAD_USERNAME, "storemanager")
+        self.assertEqual(settings.DEFAULT_OPERATION_HEAD_PASSWORD, "StoreManager@123")
 
 
 @override_settings(ALLOWED_HOSTS=["testserver", "localhost", "127.0.0.1"], STATICFILES_DIRS=[])
 class EmployeeApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.admin_user = get_user_model().objects.create_superuser(
+            username="admin",
+            email="admin@example.com",
+            password="Admin@123",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {self.build_auth_token(self.admin_user)}"
+        )
         self.item_payload = {
             "ledger": "VELAV GARMENTS INDIA PVT LTD",
             "bill_type": "Tax Invoice",
@@ -93,6 +127,9 @@ class EmployeeApiTests(TestCase):
             "needSerialNo": True,
         }
         self.sales_service_payload = {
+            "rfqType": "workshop",
+            "rfqCategory": "standard",
+            "salesExecutive": "sales_executive_1",
             "emailReferenceNumber": "MAIL-REF-1001",
             "requestDate": "2026-03-26",
             "requiredDeliveryDate": "2026-04-05",
@@ -137,6 +174,25 @@ class EmployeeApiTests(TestCase):
             "quantity": 0,
             "unit": "",
         }
+
+    def build_auth_token(self, user):
+        return _build_admin_auth_payload(user)["token"]
+
+    def create_role_user(self, username, *roles, password="RoleUser@123"):
+        user = get_user_model().objects.create_user(
+            username=username,
+            email=f"{username}@example.com",
+            password=password,
+        )
+        for role_name in roles:
+            group, _ = Group.objects.get_or_create(name=role_name)
+            user.groups.add(group)
+        return user, password
+
+    def get_authenticated_client_for_user(self, user):
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.build_auth_token(user)}")
+        return client
 
     def create_opening_stock_snapshot(self, quantity=20):
         itemfolder = ItemFolder.objects.create(
@@ -192,6 +248,87 @@ class EmployeeApiTests(TestCase):
         )
         self.assertEqual(save_response.status_code, 201)
         return save_response.data["data"]
+
+    def create_quotation_record(
+        self,
+        suffix="0200",
+        *,
+        planning_type="",
+        sent_to_head=False,
+        hod_status=Quotation.APPROVAL_PENDING,
+        md_status=Quotation.APPROVAL_PENDING,
+        client_status=Quotation.CLIENT_STATUS_PENDING,
+        client_comment="",
+    ):
+        request_item = SalesServiceRequest.objects.create(
+            referenceNo=f"RF-26-{suffix}",
+            rfqType="workshop",
+            rfqCategory="standard",
+            salesExecutive="sales_executive_1",
+            modeOfContact="phone",
+            requestDate="2026-03-28",
+            requiredDeliveryDate="2026-03-28",
+            clientName=f"Client {suffix}",
+            companyName=f"Company {suffix}",
+            phoneNo="9876543210",
+            email="",
+            requestType="service",
+            batteryServices=["Battery Inspection"],
+            scopeArea="Battery Inspection",
+            planningType=planning_type,
+            paymentTerms="Advance",
+            taxPreference="GST Extra",
+            deliveryLocation="Tiruppur",
+            deliveryMode="Courier",
+        )
+        sheet = CostEstimationSheet.objects.create(
+            salesServiceRequest=request_item,
+            costEstimationNo=f"CST-26-{suffix}",
+            taxPercentage=18,
+            profitMarginPercentage=10,
+            rawMaterialTotal=1000,
+            subtotal=1000,
+            taxAmount=180,
+            profitMarginAmount=100,
+            finalBatteryCost=1280,
+            costPerUnit=640,
+            sentToHead=True,
+            hodStatus=CostEstimationSheet.APPROVAL_APPROVED,
+            mdStatus=CostEstimationSheet.APPROVAL_APPROVED,
+        )
+        quotation = Quotation.objects.create(
+            salesServiceRequest=request_item,
+            costEstimationSheet=sheet,
+            quotationCode=f"QUOTE-26-{suffix}",
+            quotationDate="2026-03-31",
+            expiryDate="2026-04-12",
+            quoteValidityDays=12,
+            revisedNo=0,
+            attentionName=request_item.clientName,
+            companyName=request_item.companyName,
+            referenceNo=request_item.referenceNo,
+            costEstimationNo=sheet.costEstimationNo,
+            scopeDetails=["Battery Inspection"],
+            rfqScope=["Battery Inspection"],
+            rfqContactMode="phone",
+            costBreakdown={"subtotal": 1000, "finalBatteryCost": 1280},
+            totalCost=1280,
+            paymentTermsType="100% Advance",
+            paymentTerms=(
+                "100% advance payment to be released against quotation confirmation "
+                "before execution and dispatch."
+            ),
+            deliveryTermsType="Road Transport",
+            deliveryTerms="Dispatch by road transport.",
+            termsType="General Terms",
+            terms="Subject to approval.",
+            sentToHead=sent_to_head,
+            hodStatus=hod_status,
+            mdStatus=md_status,
+            clientStatus=client_status,
+            clientComment=client_comment,
+        )
+        return quotation, request_item, sheet
 
     def test_add_item_creates_record(self):
         self.create_opening_stock_snapshot()
@@ -359,7 +496,7 @@ class EmployeeApiTests(TestCase):
         self.assertTrue(response.data["data"]["isActive"])
 
     @override_settings(FILE_UPLOAD_MAX_MEMORY_SIZE=1)
-    def test_sales_service_explicit_multipart_create_and_update_accept_pdf_attachment(self):
+    def     test_sales_service_explicit_multipart_create_and_update_accept_pdf_attachment(self):
         large_pdf_content = b"%PDF-1.4\n" + (b"0" * 4096)
 
         create_response = self.client.post(
@@ -413,7 +550,7 @@ class EmployeeApiTests(TestCase):
         self.assertEqual(len(list_response.data), 1)
         self.assertIn("sales-service/", list_response.data[0]["clientImage"])
 
-    def test_sales_service_list_excludes_requests_after_cost_estimation_created(self):
+    def test_sales_service_list_retains_requests_and_marks_cost_estimation_state(self):
         create_response = self.client.post(
             "/api/sales-service/",
             self.sales_service_payload,
@@ -451,7 +588,8 @@ class EmployeeApiTests(TestCase):
 
         filtered_list_response = self.client.get("/api/sales-service/")
         self.assertEqual(filtered_list_response.status_code, 200)
-        self.assertEqual(filtered_list_response.data, [])
+        self.assertEqual(len(filtered_list_response.data), 1)
+        self.assertTrue(filtered_list_response.data[0]["hasCostEstimation"])
 
     def test_sales_service_create_supports_phone_contact_and_manufacturing_items(self):
         itemfolder = ItemFolder.objects.create(**self.itemfolder_payload)
@@ -513,8 +651,71 @@ class EmployeeApiTests(TestCase):
         )
         self.assertEqual(response.data["data"]["manufacturingItems"], [])
 
+    def test_sales_service_create_accepts_custom_service_labels_and_blank_scope(self):
+        payload = {
+            **self.sales_service_service_payload,
+            "batteryServices": json.dumps(
+                [
+                    "Surface Protection Coating",
+                    "Ship & Yard Repair Works",
+                ]
+            ),
+            "scopeArea": "",
+            "clientImage": SimpleUploadedFile(
+                "mail-reference.pdf",
+                b"%PDF-1.4\nservice",
+                content_type="application/pdf",
+            ),
+        }
+
+        response = self.client.post("/api/sales-service/", payload, format="multipart")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.data["data"]["batteryServices"],
+            ["Surface Protection Coating", "Ship & Yard Repair Works"],
+        )
+        self.assertEqual(
+            response.data["data"]["scopeArea"],
+            "Surface Protection Coating\nShip & Yard Repair Works",
+        )
+
+    def test_sales_service_create_allows_empty_service_details_and_manual_scope_area(self):
+        payload = {
+            "rfqType": "onsite",
+            "rfqCategory": "quote_of_assessment",
+            "salesExecutive": "sales_executive_2",
+            "requestDate": "2026-03-26",
+            "clientName": "Arun Kumar",
+            "companyName": "Acme Industries",
+            "modeOfContact": "email",
+            "email": "arun@example.com",
+            "emailReferenceNumber": "MAIL-REF-3001",
+            "requestType": "service",
+            "batteryServices": json.dumps([]),
+            "scopeArea": "Client requested on-site inspection",
+            "planningType": "verbal",
+            "planStartDate": "2026-03-26",
+            "planEndDate": "2026-03-27",
+            "clientImage": SimpleUploadedFile(
+                "mail-reference.pdf",
+                b"%PDF-1.4\nservice",
+                content_type="application/pdf",
+            ),
+        }
+
+        response = self.client.post("/api/sales-service/", payload, format="multipart")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["data"]["batteryServices"], [])
+        self.assertEqual(
+            response.data["data"]["scopeArea"],
+            "Client requested on-site inspection",
+        )
+
     def test_sales_service_create_supports_service_only_payload_without_commercial_fields(self):
         payload = {
+            "rfqType": "workshop",
+            "rfqCategory": "standard",
+            "salesExecutive": "sales_executive_3",
             "requestDate": "2026-03-26",
             "clientName": "Arun Kumar",
             "companyName": "Acme Industries",
@@ -1553,6 +1754,349 @@ class EmployeeApiTests(TestCase):
         self.assertNotIn("RF-26-0110", references)
         self.assertNotIn("RF-26-0111", references)
 
+    def test_quotation_send_to_head_moves_quotation_into_hod_queue(self):
+        quotation, _, _ = self.create_quotation_record("0200")
+
+        initial_hod_response = self.client.get("/api/quotation/", {"workflow": "hod"})
+        self.assertEqual(initial_hod_response.status_code, 200)
+        self.assertEqual(initial_hod_response.data, [])
+
+        response = self.client.post(
+            f"/api/quotation/{quotation.id}/send-to-head/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["data"]["sentToHead"])
+        self.assertEqual(response.data["data"]["overallStatus"], Quotation.APPROVAL_PENDING)
+
+        hod_response = self.client.get("/api/quotation/", {"workflow": "hod"})
+        self.assertEqual(hod_response.status_code, 200)
+        self.assertEqual([row["id"] for row in hod_response.data], [quotation.id])
+
+        detail_response = self.client.get(f"/api/quotation/{quotation.id}/")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.data["id"], quotation.id)
+        self.assertEqual(detail_response.data["overallStatus"], Quotation.APPROVAL_PENDING)
+
+    def test_quotation_review_and_client_response_follow_workflow(self):
+        quotation, _, _ = self.create_quotation_record("0201", sent_to_head=True)
+
+        hod_review_response = self.client.post(
+            f"/api/quotation/{quotation.id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Approved by HOD.",
+            },
+            format="json",
+        )
+        self.assertEqual(hod_review_response.status_code, 200)
+        self.assertEqual(
+            hod_review_response.data["data"]["hodStatus"],
+            Quotation.APPROVAL_APPROVED,
+        )
+
+        md_queue_response = self.client.get("/api/quotation/", {"workflow": "md"})
+        self.assertEqual(md_queue_response.status_code, 200)
+        self.assertEqual([row["id"] for row in md_queue_response.data], [quotation.id])
+
+        md_review_response = self.client.post(
+            f"/api/quotation/{quotation.id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Approved by MD.",
+            },
+            format="json",
+        )
+        self.assertEqual(md_review_response.status_code, 200)
+        self.assertEqual(
+            md_review_response.data["data"]["mdStatus"],
+            Quotation.APPROVAL_APPROVED,
+        )
+        self.assertEqual(
+            md_review_response.data["data"]["overallStatus"],
+            Quotation.APPROVAL_APPROVED,
+        )
+
+        client_response = self.client.post(
+            f"/api/quotation/{quotation.id}/client-response/",
+            {
+                "status": "accepted",
+                "comment": "Proceed with the order.",
+            },
+            format="json",
+        )
+        self.assertEqual(client_response.status_code, 200)
+        self.assertEqual(
+            client_response.data["data"]["clientStatus"],
+            Quotation.CLIENT_STATUS_ACCEPTED,
+        )
+        self.assertEqual(
+            client_response.data["data"]["clientComment"],
+            "Proceed with the order.",
+        )
+
+    def test_quotation_delete_allows_draft_and_blocks_in_review(self):
+        draft_quotation, _, _ = self.create_quotation_record("0202")
+        locked_quotation, _, _ = self.create_quotation_record("0203", sent_to_head=True)
+
+        delete_draft_response = self.client.delete(f"/api/quotation/{draft_quotation.id}/")
+        self.assertEqual(delete_draft_response.status_code, 200)
+        self.assertFalse(Quotation.objects.filter(id=draft_quotation.id).exists())
+
+        delete_locked_response = self.client.delete(f"/api/quotation/{locked_quotation.id}/")
+        self.assertEqual(delete_locked_response.status_code, 400)
+        self.assertTrue(Quotation.objects.filter(id=locked_quotation.id).exists())
+
+    def test_purchase_order_catalog_create_and_list(self):
+        quotation, _, _ = self.create_quotation_record(
+            "0204",
+            sent_to_head=True,
+            hod_status=Quotation.APPROVAL_APPROVED,
+            md_status=Quotation.APPROVAL_APPROVED,
+            client_status=Quotation.CLIENT_STATUS_ACCEPTED,
+            client_comment="Accepted by client.",
+        )
+
+        catalog_response = self.client.get("/api/purchase-order/catalog/")
+        self.assertEqual(catalog_response.status_code, 200)
+        self.assertEqual(len(catalog_response.data["quotations"]), 1)
+        self.assertEqual(catalog_response.data["quotations"][0]["id"], quotation.id)
+        self.assertEqual(
+            catalog_response.data["quotations"][0]["quotationCode"],
+            quotation.quotationCode,
+        )
+
+        next_number_response = self.client.get(
+            "/api/purchase-order/next-number/",
+            {"poDate": "2026-04-04"},
+        )
+        self.assertEqual(next_number_response.status_code, 200)
+        self.assertEqual(next_number_response.data["purchaseOrderNo"], "PO-26-0001")
+
+        purchase_order_response = self.client.post(
+            "/api/purchase-order/",
+            {
+                "quotationId": quotation.id,
+                "poDate": "2026-04-04",
+                "poReceivedDate": "2026-04-04",
+                "expectedDate": "2026-04-10",
+                "poReference": SimpleUploadedFile(
+                    "client-po.pdf",
+                    b"%PDF-1.4\npurchase-order",
+                    content_type="application/pdf",
+                ),
+            },
+            format="multipart",
+        )
+        self.assertEqual(purchase_order_response.status_code, 201)
+        self.assertEqual(
+            purchase_order_response.data["data"]["purchaseOrderNo"],
+            "PO-26-0001",
+        )
+        self.assertEqual(PurchaseOrder.objects.count(), 1)
+
+        list_response = self.client.get("/api/purchase-order/")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]["quotationCode"], quotation.quotationCode)
+        self.assertTrue(
+            list_response.data[0]["poReference"].startswith(
+                "http://testserver/media/purchase-orders/"
+            )
+        )
+
+        updated_catalog_response = self.client.get("/api/purchase-order/catalog/")
+        self.assertEqual(updated_catalog_response.status_code, 200)
+        self.assertEqual(updated_catalog_response.data["quotations"], [])
+
+    def test_purchase_order_detail_update_delete_and_quotation_notification(self):
+        quotation, _, _ = self.create_quotation_record(
+            "0205",
+            sent_to_head=True,
+            hod_status=Quotation.APPROVAL_APPROVED,
+            md_status=Quotation.APPROVAL_APPROVED,
+            client_status=Quotation.CLIENT_STATUS_ACCEPTED,
+            client_comment="Accepted by client.",
+        )
+
+        create_response = self.client.post(
+            "/api/purchase-order/",
+            {
+                "quotationId": quotation.id,
+                "poDate": "2026-04-04",
+                "poReceivedDate": "2026-04-04",
+                "expectedDate": "2026-04-10",
+                "poReference": SimpleUploadedFile(
+                    "client-po.pdf",
+                    b"%PDF-1.4\npurchase-order",
+                    content_type="application/pdf",
+                ),
+            },
+            format="multipart",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        purchase_order_id = create_response.data["data"]["id"]
+
+        quotation_response = self.client.get("/api/quotation/")
+        self.assertEqual(quotation_response.status_code, 200)
+        self.assertTrue(quotation_response.data[0]["hasPurchaseOrder"])
+        self.assertEqual(quotation_response.data[0]["purchaseOrderNo"], "PO-26-0001")
+        self.assertIn("Job card created", quotation_response.data[0]["workflowNotice"])
+
+        detail_response = self.client.get(f"/api/purchase-order/{purchase_order_id}/")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.data["purchaseOrderNo"], "PO-26-0001")
+
+        update_response = self.client.put(
+            f"/api/purchase-order/{purchase_order_id}/",
+            {
+                "quotationId": quotation.id,
+                "expectedDate": "2026-04-15",
+            },
+            format="multipart",
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.data["data"]["expectedDate"], "2026-04-15")
+
+        delete_response = self.client.delete(f"/api/purchase-order/{purchase_order_id}/")
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertFalse(PurchaseOrder.objects.filter(id=purchase_order_id).exists())
+
+    def test_document_controller_can_open_and_save_job_card_from_purchase_order(self):
+        quotation, request_item, sheet = self.create_quotation_record(
+            "0207",
+            sent_to_head=True,
+            hod_status=Quotation.APPROVAL_APPROVED,
+            md_status=Quotation.APPROVAL_APPROVED,
+            client_status=Quotation.CLIENT_STATUS_ACCEPTED,
+            client_comment="Accepted by client.",
+        )
+        CostEstimationSheetRow.objects.bulk_create(
+            [
+                CostEstimationSheetRow(
+                    sheet=sheet,
+                    section="raw_material",
+                    itemName="Lithium Cell",
+                    secondaryLabel="Category",
+                    secondaryValue="Battery",
+                    unit="Nos",
+                    rate=1200,
+                    quantity=2,
+                    total=2400,
+                    displayOrder=1,
+                ),
+                CostEstimationSheetRow(
+                    sheet=sheet,
+                    section="manufacturing",
+                    itemName="Assembly",
+                    secondaryLabel="Machine Used",
+                    secondaryValue="Bench",
+                    unit="Hour",
+                    rate=350,
+                    quantity=4,
+                    total=1400,
+                    displayOrder=2,
+                ),
+                CostEstimationSheetRow(
+                    sheet=sheet,
+                    section="labor",
+                    itemName="Technician",
+                    secondaryLabel="",
+                    secondaryValue="",
+                    unit="Hour",
+                    rate=250,
+                    quantity=3,
+                    total=750,
+                    displayOrder=3,
+                ),
+            ]
+        )
+        purchase_order = PurchaseOrder.objects.create(
+            quotation=quotation,
+            purchaseOrderNo="PO-26-0007",
+            poDate="2026-04-07",
+            poReceivedDate="2026-04-07",
+            expectedDate="2026-04-12",
+            poReference=SimpleUploadedFile(
+                "client-po.pdf",
+                b"%PDF-1.4\njob-card",
+                content_type="application/pdf",
+            ),
+        )
+        document_controller_user, _ = self.create_role_user(
+            "document-controller-jobcard",
+            ROLE_DOCUMENT_CONTROLLER,
+        )
+        document_controller_client = self.get_authenticated_client_for_user(
+            document_controller_user,
+        )
+
+        opening_response = document_controller_client.get(
+            f"/api/job-card/opening/{purchase_order.id}/"
+        )
+        self.assertEqual(opening_response.status_code, 200)
+        self.assertEqual(
+            opening_response.data["opening"]["jobCardNo"],
+            "JOB-CARD-0001",
+        )
+        self.assertEqual(
+            opening_response.data["opening"]["rfqNo"],
+            request_item.referenceNo,
+        )
+        self.assertEqual(
+            opening_response.data["opening"]["companyName"],
+            quotation.companyName,
+        )
+        self.assertEqual(opening_response.data["opening"]["scopeDetails"], ["Battery Inspection"])
+        self.assertIn("Lithium Cell 2.0 Nos", opening_response.data["opening"]["materials"])
+        self.assertIn("Assembly 4.0 Hour", opening_response.data["opening"]["services"])
+        self.assertIn("Technician 3.0 Hour", opening_response.data["opening"]["services"])
+
+        create_response = document_controller_client.post(
+            "/api/job-card/",
+            {
+                "purchaseOrderId": purchase_order.id,
+                "jobCardDate": "2026-04-07",
+                "planningDate": "2026-04-08",
+                "expectedDate": "2026-04-14",
+                "remarks": "Priority inspection",
+                "deliveryRemark": "Deliver after testing",
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.data["data"]["jobCardNo"], "JOB-CARD-0001")
+        self.assertEqual(JobCard.objects.count(), 1)
+
+        job_card_id = create_response.data["data"]["id"]
+        detail_response = document_controller_client.get(f"/api/job-card/{job_card_id}/")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.data["purchaseOrderNo"], purchase_order.purchaseOrderNo)
+        self.assertEqual(detail_response.data["scopeDetails"], ["Battery Inspection"])
+        self.assertIn("Lithium Cell 2.0 Nos", detail_response.data["materials"])
+        self.assertIn("Assembly 4.0 Hour", detail_response.data["services"])
+
+        update_response = document_controller_client.put(
+            f"/api/job-card/{job_card_id}/",
+            {
+                "planningDate": "2026-04-09",
+                "expectedDate": "2026-04-15",
+                "deliveryRemark": "Updated delivery note",
+            },
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.data["data"]["expectedDate"], "2026-04-15")
+
+        protected_delete_response = document_controller_client.delete(
+            f"/api/purchase-order/{purchase_order.id}/"
+        )
+        self.assertEqual(protected_delete_response.status_code, 400)
+        self.assertTrue(PurchaseOrder.objects.filter(id=purchase_order.id).exists())
+
     def test_opening_stock_snapshot_create_and_get_latest(self):
         itemfolder = ItemFolder.objects.create(**self.itemfolder_payload)
         response = self.client.post(
@@ -1646,6 +2190,1184 @@ class EmployeeApiTests(TestCase):
     def test_dispatch_summary_rejects_invalid_payload(self):
         response = self.client.post("/api/dispatch-summary/", {}, format="json")
         self.assertEqual(response.status_code, 400)
+
+    def test_admin_login_and_verify_return_workflow_roles(self):
+        workflow_user, password = self.create_role_user(
+            "salesexec-login",
+            ROLE_SALES_EXECUTIVE,
+            password="SalesExec@123",
+        )
+        anonymous_client = APIClient()
+
+        login_response = anonymous_client.post(
+            "/api/admin-login/",
+            {
+                "username": workflow_user.username,
+                "password": password,
+            },
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, 200)
+        self.assertEqual(
+            login_response.data["user"]["roles"],
+            [ROLE_SALES_EXECUTIVE],
+        )
+        self.assertEqual(
+            login_response.data["user"]["primaryRole"],
+            ROLE_SALES_EXECUTIVE,
+        )
+
+        verify_response = anonymous_client.post(
+            "/api/admin-verify/",
+            {"token": login_response.data["token"]},
+            format="json",
+        )
+        self.assertEqual(verify_response.status_code, 200)
+        self.assertEqual(
+            verify_response.data["user"]["roles"],
+            [ROLE_SALES_EXECUTIVE],
+        )
+
+    def test_admin_login_returns_document_controller_and_operation_head_roles(self):
+        workflow_user, password = self.create_role_user(
+            "ops-doc-login",
+            ROLE_DOCUMENT_CONTROLLER,
+            ROLE_OPERATION_HEAD,
+            password="OpsDoc@123",
+        )
+        anonymous_client = APIClient()
+
+        login_response = anonymous_client.post(
+            "/api/admin-login/",
+            {
+                "username": workflow_user.username,
+                "password": password,
+            },
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, 200)
+        self.assertEqual(
+            login_response.data["user"]["roles"],
+            [ROLE_DOCUMENT_CONTROLLER, ROLE_OPERATION_HEAD],
+        )
+
+    def test_document_controller_can_manage_purchase_orders(self):
+        quotation, _, _ = self.create_quotation_record(
+            "0206",
+            sent_to_head=True,
+            hod_status=Quotation.APPROVAL_APPROVED,
+            md_status=Quotation.APPROVAL_APPROVED,
+            client_status=Quotation.CLIENT_STATUS_ACCEPTED,
+            client_comment="Accepted by client.",
+        )
+        document_controller_user, _ = self.create_role_user(
+            "document-controller",
+            ROLE_DOCUMENT_CONTROLLER,
+        )
+        document_controller_client = self.get_authenticated_client_for_user(
+            document_controller_user,
+        )
+
+        create_response = document_controller_client.post(
+            "/api/purchase-order/",
+            {
+                "quotationId": quotation.id,
+                "poDate": "2026-04-07",
+                "poReceivedDate": "2026-04-07",
+                "expectedDate": "2026-04-12",
+                "poReference": SimpleUploadedFile(
+                    "client-po.pdf",
+                    b"%PDF-1.4\ndocument-controller",
+                    content_type="application/pdf",
+                ),
+            },
+            format="multipart",
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        list_response = document_controller_client.get("/api/purchase-order/")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.data), 1)
+
+    def test_quote_of_completion_rfq_moves_from_hod_md_to_direct_job_card_queue(self):
+        payload = {
+            "rfqType": "onsite",
+            "rfqCategory": "quote_of_completion",
+            "salesExecutive": "sales_executive_2",
+            "requestDate": "2026-03-26",
+            "requiredDeliveryDate": "2026-03-29",
+            "clientName": "Completion Approval Client",
+            "companyName": "Completion Approval Company",
+            "modeOfContact": "email",
+            "email": "completion-approval@example.com",
+            "emailReferenceNumber": "MAIL-REF-COMP-1",
+            "requestType": "service",
+            "batteryServices": json.dumps([]),
+            "scopeArea": "Client requested quote after completion",
+            "planningType": "verbal",
+            "planStartDate": "2026-03-26",
+            "planEndDate": "2026-03-27",
+            "clientImage": SimpleUploadedFile(
+                "completion-approval.pdf",
+                b"%PDF-1.4\ncompletion-approval",
+                content_type="application/pdf",
+            ),
+        }
+
+        response = self.client.post("/api/sales-service/", payload, format="multipart")
+        self.assertEqual(response.status_code, 201)
+        request_id = response.data["data"]["id"]
+
+        quotation = Quotation.objects.get(salesServiceRequest_id=request_id)
+        self.assertTrue(quotation.sentToHead)
+        self.assertEqual(quotation.hodStatus, Quotation.APPROVAL_PENDING)
+        self.assertEqual(quotation.mdStatus, Quotation.APPROVAL_PENDING)
+        self.assertIsNone(quotation.costEstimationSheet)
+
+        hod_queue = self.client.get("/api/quotation/", {"workflow": "hod"})
+        self.assertEqual(hod_queue.status_code, 200)
+        self.assertTrue(any(row["id"] == quotation.id for row in hod_queue.data))
+
+        hod_user, _ = self.create_role_user("hod-completion", ROLE_HOD)
+        md_user, _ = self.create_role_user("md-completion", ROLE_MD)
+        hod_client = self.get_authenticated_client_for_user(hod_user)
+        md_client = self.get_authenticated_client_for_user(md_user)
+
+        hod_review = hod_client.post(
+            f"/api/quotation/{quotation.id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Completion approved by HOD.",
+            },
+            format="json",
+        )
+        self.assertEqual(hod_review.status_code, 200)
+
+        md_review = md_client.post(
+            f"/api/quotation/{quotation.id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Completion approved by MD.",
+            },
+            format="json",
+        )
+        self.assertEqual(md_review.status_code, 200)
+
+        queue_response = self.client.get("/api/job-card/queue/")
+        self.assertEqual(queue_response.status_code, 200)
+        queue_row = next(
+            row for row in queue_response.data if row["quotationId"] == quotation.id
+        )
+        self.assertEqual(queue_row["queueType"], "quotation")
+        self.assertIsNone(queue_row["purchaseOrderId"])
+
+    def test_quote_of_assessment_rfq_moves_directly_to_job_card_queue(self):
+        payload = {
+            "rfqType": "workshop",
+            "rfqCategory": "quote_of_assessment",
+            "salesExecutive": "sales_executive_3",
+            "requestDate": "2026-03-26",
+            "requiredDeliveryDate": "2026-03-30",
+            "clientName": "Assessment Direct Client",
+            "companyName": "Assessment Direct Company",
+            "modeOfContact": "phone",
+            "phoneNo": "9876543210",
+            "requestType": "service",
+            "batteryServices": json.dumps(["Battery Inspection"]),
+            "scopeArea": "Battery Inspection",
+            "planningType": "verbal",
+            "planStartDate": "2026-03-26",
+            "planEndDate": "2026-03-27",
+            "clientImage": SimpleUploadedFile(
+                "assessment.png",
+                b"imagecontent",
+                content_type="image/png",
+            ),
+        }
+
+        response = self.client.post("/api/sales-service/", payload, format="multipart")
+        self.assertEqual(response.status_code, 201)
+        quotation = Quotation.objects.get(
+            salesServiceRequest_id=response.data["data"]["id"],
+        )
+        self.assertEqual(quotation.hodStatus, Quotation.APPROVAL_APPROVED)
+        self.assertEqual(quotation.mdStatus, Quotation.APPROVAL_APPROVED)
+
+        hod_queue = self.client.get("/api/quotation/", {"workflow": "hod"})
+        self.assertEqual(hod_queue.status_code, 200)
+        self.assertFalse(any(row["id"] == quotation.id for row in hod_queue.data))
+
+        queue_response = self.client.get("/api/job-card/queue/")
+        self.assertEqual(queue_response.status_code, 200)
+        queue_row = next(
+            row for row in queue_response.data if row["quotationId"] == quotation.id
+        )
+        self.assertEqual(queue_row["queueType"], "quotation")
+        self.assertEqual(queue_row["workflowLabel"], "Direct RFQ")
+
+    def test_workshop_job_card_store_manager_workflow_requires_approval_before_hod_send(self):
+        payload = {
+            "rfqType": "workshop",
+            "rfqCategory": "quote_of_assessment",
+            "salesExecutive": "sales_executive_3",
+            "requestDate": "2026-03-26",
+            "requiredDeliveryDate": "2026-03-30",
+            "clientName": "Store Manager Client",
+            "companyName": "Store Manager Company",
+            "modeOfContact": "phone",
+            "phoneNo": "9876543210",
+            "requestType": "service",
+            "batteryServices": json.dumps(["Battery Inspection"]),
+            "scopeArea": "Battery Inspection",
+            "planningType": "verbal",
+            "planStartDate": "2026-03-26",
+            "planEndDate": "2026-03-27",
+            "clientImage": SimpleUploadedFile(
+                "store-manager.png",
+                b"imagecontent",
+                content_type="image/png",
+            ),
+        }
+
+        response = self.client.post("/api/sales-service/", payload, format="multipart")
+        self.assertEqual(response.status_code, 201)
+        quotation = Quotation.objects.get(salesServiceRequest_id=response.data["data"]["id"])
+
+        create_job_card_response = self.client.post(
+            "/api/job-card/",
+            {
+                "quotationId": quotation.id,
+                "jobCardDate": "2026-03-28",
+                "planningDate": "2026-03-29",
+                "expectedDate": "2026-03-30",
+                "remarks": "Workshop job card",
+                "deliveryRemark": "Deliver after store approval",
+            },
+            format="json",
+        )
+        self.assertEqual(create_job_card_response.status_code, 201)
+        job_card_id = create_job_card_response.data["data"]["id"]
+        self.assertTrue(create_job_card_response.data["data"]["requiresStoreManagerApproval"])
+        self.assertFalse(create_job_card_response.data["data"]["storeManagerApproved"])
+        self.assertFalse(create_job_card_response.data["data"]["sentToHod"])
+
+        operation_head_user, _ = self.create_role_user("store-manager-user", ROLE_OPERATION_HEAD)
+        hod_user, _ = self.create_role_user("hod-job-card", ROLE_HOD)
+        operation_head_client = self.get_authenticated_client_for_user(operation_head_user)
+        hod_client = self.get_authenticated_client_for_user(hod_user)
+
+        initial_store_manager_list_response = operation_head_client.get(
+            "/api/job-card/",
+            {"workflow": "store_manager"},
+        )
+        self.assertEqual(initial_store_manager_list_response.status_code, 200)
+        self.assertFalse(
+            any(row["id"] == job_card_id for row in initial_store_manager_list_response.data)
+        )
+
+        notify_store_response = operation_head_client.post(
+            f"/api/job-card/{job_card_id}/notify-store/",
+            format="json",
+        )
+        self.assertEqual(notify_store_response.status_code, 200)
+        self.assertTrue(notify_store_response.data["data"]["sentToStoreManager"])
+        self.assertRegex(notify_store_response.data["data"]["grnNo"], r"^GRN-\d{4}$")
+
+        store_manager_list_response = operation_head_client.get(
+            "/api/job-card/",
+            {"workflow": "store_manager"},
+        )
+        self.assertEqual(store_manager_list_response.status_code, 200)
+        self.assertTrue(any(row["id"] == job_card_id for row in store_manager_list_response.data))
+
+        blocked_send_response = operation_head_client.post(
+            f"/api/job-card/{job_card_id}/send-to-hod/",
+            format="json",
+        )
+        self.assertEqual(blocked_send_response.status_code, 400)
+
+        missing_comment_response = operation_head_client.post(
+            f"/api/job-card/{job_card_id}/store-manager-approve/",
+            {},
+            format="json",
+        )
+        self.assertEqual(missing_comment_response.status_code, 400)
+
+        approve_response = operation_head_client.post(
+            f"/api/job-card/{job_card_id}/store-manager-approve/",
+            {"comment": "Checked and approved by store manager."},
+            format="json",
+        )
+        self.assertEqual(approve_response.status_code, 200)
+        self.assertTrue(approve_response.data["data"]["storeManagerApproved"])
+        self.assertEqual(
+            approve_response.data["data"]["storeManagerComment"],
+            "Checked and approved by store manager.",
+        )
+        self.assertFalse(approve_response.data["data"]["sentToHod"])
+
+        send_response = operation_head_client.post(
+            f"/api/job-card/{job_card_id}/send-to-hod/",
+            format="json",
+        )
+        self.assertEqual(send_response.status_code, 200)
+        self.assertTrue(send_response.data["data"]["storeManagerApproved"])
+        self.assertTrue(send_response.data["data"]["sentToHod"])
+
+        hod_list_response = hod_client.get("/api/job-card/", {"workflow": "hod"})
+        self.assertEqual(hod_list_response.status_code, 200)
+        self.assertTrue(any(row["id"] == job_card_id for row in hod_list_response.data))
+
+    def test_store_manager_job_card_list_only_includes_workshop_jobs(self):
+        workshop_payload = {
+            "rfqType": "workshop",
+            "rfqCategory": "quote_of_assessment",
+            "salesExecutive": "sales_executive_1",
+            "requestDate": "2026-03-26",
+            "requiredDeliveryDate": "2026-03-30",
+            "clientName": "Workshop Job Card Client",
+            "companyName": "Workshop Job Card Company",
+            "modeOfContact": "phone",
+            "phoneNo": "9876543210",
+            "requestType": "service",
+            "batteryServices": json.dumps(["Battery Inspection"]),
+            "scopeArea": "Battery Inspection",
+            "planningType": "verbal",
+            "planStartDate": "2026-03-26",
+            "planEndDate": "2026-03-27",
+            "clientImage": SimpleUploadedFile(
+                "workshop-filter.png",
+                b"imagecontent",
+                content_type="image/png",
+            ),
+        }
+        workshop_response = self.client.post("/api/sales-service/", workshop_payload, format="multipart")
+        self.assertEqual(workshop_response.status_code, 201)
+        workshop_quotation = Quotation.objects.get(
+            salesServiceRequest_id=workshop_response.data["data"]["id"]
+        )
+        workshop_job_card_response = self.client.post(
+            "/api/job-card/",
+            {
+                "quotationId": workshop_quotation.id,
+                "jobCardDate": "2026-03-28",
+                "planningDate": "2026-03-29",
+                "expectedDate": "2026-03-30",
+                "remarks": "Workshop filter",
+                "deliveryRemark": "Workshop filter",
+            },
+            format="json",
+        )
+        self.assertEqual(workshop_job_card_response.status_code, 201)
+        workshop_job_card_id = workshop_job_card_response.data["data"]["id"]
+
+        onsite_request = SalesServiceRequest.objects.create(
+            referenceNo="RF-26-0991",
+            rfqType="onsite",
+            rfqCategory="quote_of_completion",
+            salesExecutive="sales_executive_1",
+            modeOfContact="phone",
+            requestDate="2026-03-28",
+            requiredDeliveryDate="2026-03-30",
+            clientName="Onsite Filter Client",
+            companyName="Onsite Filter Company",
+            phoneNo="9876543210",
+            email="",
+            requestType="service",
+            batteryServices=["Battery Inspection"],
+            scopeArea="Battery Inspection",
+            planningType="verbal",
+            planStartDate="2026-03-28",
+            planEndDate="2026-03-29",
+            paymentTerms="Advance",
+            taxPreference="GST Extra",
+            deliveryLocation="Tiruppur",
+            deliveryMode="Courier",
+        )
+        onsite_quotation = Quotation.objects.create(
+            salesServiceRequest=onsite_request,
+            quotationCode="QUOTE-26-0991",
+            quotationDate="2026-03-28",
+            expiryDate="2026-03-28",
+            quoteValidityDays=0,
+            revisedNo=0,
+            attentionName=onsite_request.clientName,
+            companyName=onsite_request.companyName,
+            referenceNo=onsite_request.referenceNo,
+            costEstimationNo="",
+            scopeDetails=["Battery Inspection"],
+            rfqScope=["Battery Inspection"],
+            rfqRemarks="Onsite filter",
+            rfqContactMode="phone",
+            costBreakdown={"subtotal": 0, "finalBatteryCost": 0},
+            totalCost=0,
+            sentToHead=True,
+            hodStatus=Quotation.APPROVAL_APPROVED,
+            mdStatus=Quotation.APPROVAL_APPROVED,
+        )
+        onsite_job_card_response = self.client.post(
+            "/api/job-card/",
+            {
+                "quotationId": onsite_quotation.id,
+                "jobCardDate": "2026-03-28",
+                "planningDate": "2026-03-29",
+                "expectedDate": "2026-03-30",
+                "remarks": "Onsite filter",
+                "deliveryRemark": "Onsite filter",
+            },
+            format="json",
+        )
+        self.assertEqual(onsite_job_card_response.status_code, 201)
+        onsite_job_card_id = onsite_job_card_response.data["data"]["id"]
+
+        operation_head_user, _ = self.create_role_user("store-manager-filter", ROLE_OPERATION_HEAD)
+        operation_head_client = self.get_authenticated_client_for_user(operation_head_user)
+        notify_store_response = operation_head_client.post(
+            f"/api/job-card/{workshop_job_card_id}/notify-store/",
+            format="json",
+        )
+        self.assertEqual(notify_store_response.status_code, 200)
+
+        store_manager_list_response = operation_head_client.get(
+            "/api/job-card/",
+            {"workflow": "store_manager"},
+        )
+        self.assertEqual(store_manager_list_response.status_code, 200)
+        returned_ids = [row["id"] for row in store_manager_list_response.data]
+        self.assertIn(workshop_job_card_id, returned_ids)
+        self.assertNotIn(onsite_job_card_id, returned_ids)
+
+    def test_special_rfq_planning_dates_follow_request_date(self):
+        payload = {
+            "rfqType": "workshop",
+            "rfqCategory": "quote_of_assessment",
+            "salesExecutive": "sales_executive_1",
+            "requestDate": "2026-03-26",
+            "requiredDeliveryDate": "2026-03-30",
+            "clientName": "Planning Client",
+            "companyName": "Planning Company",
+            "modeOfContact": "phone",
+            "phoneNo": "9876543210",
+            "requestType": "service",
+            "batteryServices": json.dumps(["Battery Inspection"]),
+            "scopeArea": "Battery Inspection",
+            "planningType": "verbal",
+            "planStartDate": "2026-03-28",
+            "planEndDate": "2026-03-29",
+            "clientImage": SimpleUploadedFile(
+                "planning-lock.png",
+                b"imagecontent",
+                content_type="image/png",
+            ),
+        }
+
+        response = self.client.post("/api/sales-service/", payload, format="multipart")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["data"]["planStartDate"], "2026-03-26")
+        self.assertEqual(response.data["data"]["planEndDate"], "2026-03-26")
+
+        request_item = SalesServiceRequest.objects.get(id=response.data["data"]["id"])
+        self.assertEqual(str(request_item.planStartDate), "2026-03-26")
+        self.assertEqual(str(request_item.planEndDate), "2026-03-26")
+
+    def test_spare_and_onsite_job_cards_can_be_sent_to_hod_directly(self):
+        def create_direct_job_card(rfq_type, suffix):
+            request_item = SalesServiceRequest.objects.create(
+                referenceNo=f"RF-26-{suffix}",
+                rfqType=rfq_type,
+                rfqCategory="quote_of_completion",
+                salesExecutive="sales_executive_1",
+                modeOfContact="phone",
+                requestDate="2026-03-28",
+                requiredDeliveryDate="2026-03-30",
+                clientName=f"{rfq_type.title()} Client",
+                companyName=f"{rfq_type.title()} Company",
+                phoneNo="9876543210",
+                email="",
+                requestType="service",
+                batteryServices=["Battery Inspection"],
+                scopeArea="Battery Inspection",
+                planningType="verbal",
+                planStartDate="2026-03-28",
+                planEndDate="2026-03-29",
+                paymentTerms="Advance",
+                taxPreference="GST Extra",
+                deliveryLocation="Tiruppur",
+                deliveryMode="Courier",
+            )
+            quotation = Quotation.objects.create(
+                salesServiceRequest=request_item,
+                quotationCode=f"QUOTE-26-{suffix}",
+                quotationDate="2026-03-28",
+                expiryDate="2026-03-28",
+                quoteValidityDays=0,
+                revisedNo=0,
+                attentionName=request_item.clientName,
+                companyName=request_item.companyName,
+                referenceNo=request_item.referenceNo,
+                costEstimationNo="",
+                scopeDetails=["Battery Inspection"],
+                rfqScope=["Battery Inspection"],
+                rfqRemarks=f"{rfq_type.title()} HOD notification",
+                rfqContactMode="phone",
+                costBreakdown={"subtotal": 0, "finalBatteryCost": 0},
+                totalCost=0,
+                sentToHead=True,
+                hodStatus=Quotation.APPROVAL_APPROVED,
+                mdStatus=Quotation.APPROVAL_APPROVED,
+            )
+            response = self.client.post(
+                "/api/job-card/",
+                {
+                    "quotationId": quotation.id,
+                    "jobCardDate": "2026-03-28",
+                    "planningDate": "2026-03-29",
+                    "expectedDate": "2026-03-30",
+                    "remarks": f"{rfq_type.title()} job card",
+                    "deliveryRemark": f"{rfq_type.title()} delivery",
+                },
+                format="json",
+            )
+            self.assertEqual(response.status_code, 201)
+            self.assertFalse(response.data["data"]["requiresStoreManagerApproval"])
+            self.assertFalse(response.data["data"]["storeManagerApproved"])
+            return response.data["data"]["id"]
+
+        spare_job_card_id = create_direct_job_card("spare", "0992")
+        onsite_job_card_id = create_direct_job_card("onsite", "0993")
+
+        operation_head_user, _ = self.create_role_user("notify-hod-user", ROLE_OPERATION_HEAD)
+        hod_user, _ = self.create_role_user("hod-notify-list", ROLE_HOD)
+        operation_head_client = self.get_authenticated_client_for_user(operation_head_user)
+        hod_client = self.get_authenticated_client_for_user(hod_user)
+
+        spare_send_response = operation_head_client.post(
+            f"/api/job-card/{spare_job_card_id}/send-to-hod/",
+            format="json",
+        )
+        self.assertEqual(spare_send_response.status_code, 200)
+        self.assertTrue(spare_send_response.data["data"]["sentToHod"])
+
+        onsite_send_response = operation_head_client.post(
+            f"/api/job-card/{onsite_job_card_id}/send-to-hod/",
+            format="json",
+        )
+        self.assertEqual(onsite_send_response.status_code, 200)
+        self.assertTrue(onsite_send_response.data["data"]["sentToHod"])
+
+        hod_list_response = hod_client.get("/api/job-card/", {"workflow": "hod"})
+        self.assertEqual(hod_list_response.status_code, 200)
+        returned_ids = [row["id"] for row in hod_list_response.data]
+        self.assertIn(spare_job_card_id, returned_ids)
+        self.assertIn(onsite_job_card_id, returned_ids)
+
+    def test_operation_register_assign_work_moves_row_to_site_engineer_work_queue(self):
+        payload = {
+            "rfqType": "workshop",
+            "rfqCategory": "quote_of_assessment",
+            "salesExecutive": "sales_executive_1",
+            "requestDate": "2026-03-26",
+            "requiredDeliveryDate": "2026-03-30",
+            "clientName": "Operation Register Client",
+            "companyName": "Operation Register Company",
+            "modeOfContact": "phone",
+            "phoneNo": "9876543210",
+            "requestType": "service",
+            "batteryServices": json.dumps(["Battery Inspection"]),
+            "scopeArea": "Battery Inspection",
+            "planningType": "verbal",
+            "planStartDate": "2026-03-26",
+            "planEndDate": "2026-03-27",
+            "clientImage": SimpleUploadedFile(
+                "operation-register.png",
+                b"imagecontent",
+                content_type="image/png",
+            ),
+        }
+
+        response = self.client.post("/api/sales-service/", payload, format="multipart")
+        self.assertEqual(response.status_code, 201)
+        quotation = Quotation.objects.get(salesServiceRequest_id=response.data["data"]["id"])
+
+        create_job_card_response = self.client.post(
+            "/api/job-card/",
+            {
+                "quotationId": quotation.id,
+                "jobCardDate": "2026-03-28",
+                "planningDate": "2026-03-29",
+                "expectedDate": "2026-03-30",
+                "remarks": "Operation register job card",
+                "deliveryRemark": "Move to work queue",
+            },
+            format="json",
+        )
+        self.assertEqual(create_job_card_response.status_code, 201)
+        job_card_id = create_job_card_response.data["data"]["id"]
+
+        operation_head_user, _ = self.create_role_user("store-manager-op-register", ROLE_OPERATION_HEAD)
+        hod_user, _ = self.create_role_user("hod-op-register", ROLE_HOD)
+        site_engineer_user, _ = self.create_role_user("site-engineer-op-register", ROLE_SITE_ENGINEER)
+        operation_head_client = self.get_authenticated_client_for_user(operation_head_user)
+        hod_client = self.get_authenticated_client_for_user(hod_user)
+        site_engineer_client = self.get_authenticated_client_for_user(site_engineer_user)
+
+        notify_store_response = operation_head_client.post(
+            f"/api/job-card/{job_card_id}/notify-store/",
+            format="json",
+        )
+        self.assertEqual(notify_store_response.status_code, 200)
+
+        approve_response = operation_head_client.post(
+            f"/api/job-card/{job_card_id}/store-manager-approve/",
+            {"comment": "Checked for operation register workflow."},
+            format="json",
+        )
+        self.assertEqual(approve_response.status_code, 200)
+
+        send_to_hod_response = operation_head_client.post(
+            f"/api/job-card/{job_card_id}/send-to-hod/",
+            format="json",
+        )
+        self.assertEqual(send_to_hod_response.status_code, 200)
+        self.assertTrue(send_to_hod_response.data["data"]["sentToHod"])
+
+        operation_register_response = hod_client.post(
+            "/api/operation-register/",
+            {
+                "jobCardId": job_card_id,
+                "shopFloorIncharge": "supervisor_1",
+                "remarks": "Create operation register.",
+            },
+            format="json",
+        )
+        self.assertEqual(operation_register_response.status_code, 201)
+        operation_register_id = operation_register_response.data["data"]["id"]
+        self.assertRegex(
+            operation_register_response.data["data"]["operationNo"],
+            r"^OP-\d{4}$",
+        )
+
+        hod_list_response = hod_client.get("/api/operation-register/")
+        self.assertEqual(hod_list_response.status_code, 200)
+        self.assertTrue(any(row["id"] == operation_register_id for row in hod_list_response.data))
+
+        assign_response = hod_client.post(
+            f"/api/operation-register/{operation_register_id}/assign-work/",
+            format="json",
+        )
+        self.assertEqual(assign_response.status_code, 200)
+        self.assertTrue(assign_response.data["data"]["assignedToSiteEngineer"])
+
+        operation_register = OperationRegister.objects.get(id=operation_register_id)
+        self.assertTrue(operation_register.assignedToSiteEngineer)
+
+        refreshed_hod_list_response = hod_client.get("/api/operation-register/")
+        self.assertEqual(refreshed_hod_list_response.status_code, 200)
+        self.assertFalse(
+            any(row["id"] == operation_register_id for row in refreshed_hod_list_response.data)
+        )
+
+        work_queue_response = site_engineer_client.get(
+            "/api/operation-register/",
+            {"workflow": "work_queue"},
+        )
+        self.assertEqual(work_queue_response.status_code, 200)
+        work_queue_row = next(
+            row for row in work_queue_response.data if row["id"] == operation_register_id
+        )
+        self.assertEqual(work_queue_row["shopFloorIncharge"], "supervisor_1")
+        self.assertEqual(work_queue_row["shopFloorInchargeLabel"], "Supervisor 1")
+        self.assertIn("Battery Inspection", work_queue_row["scopeDetails"])
+        self.assertIn("Battery Inspection", work_queue_row["services"])
+
+    def test_operation_register_opening_exposes_shopfloor_registration_fields(self):
+        quotation, _, sheet = self.create_quotation_record("0911", sent_to_head=True)
+        CostEstimationSheetRow.objects.create(
+            sheet=sheet,
+            section="raw_material",
+            itemName="Lithium Cell",
+            secondaryLabel="",
+            secondaryValue="",
+            unit="Nos",
+            rate=250,
+            quantity=2,
+            total=500,
+            displayOrder=1,
+        )
+        CostEstimationSheetRow.objects.create(
+            sheet=sheet,
+            section="manufacturing",
+            itemName="Assembly",
+            secondaryLabel="",
+            secondaryValue="",
+            unit="Hour",
+            rate=150,
+            quantity=4,
+            total=600,
+            displayOrder=2,
+        )
+        purchase_order = PurchaseOrder.objects.create(
+            quotation=quotation,
+            purchaseOrderNo="PO-26-0911",
+            poDate="2026-04-02",
+            poReceivedDate="2026-04-03",
+            expectedDate="2026-04-10",
+            poReference=SimpleUploadedFile(
+                "shopfloor-po.pdf",
+                b"%PDF-1.4\nshopfloor",
+                content_type="application/pdf",
+            ),
+        )
+        job_card = JobCard.objects.create(
+            purchaseOrder=purchase_order,
+            jobCardNo="JOB-CARD-0911",
+            jobCardDate="2026-04-03",
+            planningDate="2026-04-04",
+            expectedDate="2026-04-10",
+            sentToHod=True,
+        )
+        OperationRegister.objects.create(
+            jobCard=job_card,
+            operationNo="OP-0911",
+            opDate="2026-04-03",
+            shopFloorIncharge="supervisor_1",
+            remarks="Ready for shopfloor registration",
+            assignedToSiteEngineer=True,
+        )
+        site_engineer_user, _ = self.create_role_user(
+            "site-engineer-opening",
+            ROLE_SITE_ENGINEER,
+        )
+        site_engineer_client = self.get_authenticated_client_for_user(site_engineer_user)
+
+        response = site_engineer_client.get(
+            f"/api/operation-register/opening/{job_card.id}/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["opening"]["quotationCode"], quotation.quotationCode)
+        self.assertEqual(response.data["opening"]["quotationDate"], "2026-03-31")
+        self.assertEqual(response.data["opening"]["purchaseOrderNo"], "PO-26-0911")
+        self.assertEqual(response.data["opening"]["poDate"], "2026-04-02")
+        self.assertEqual(response.data["opening"]["scopeDetails"], ["Battery Inspection"])
+        self.assertIn("Lithium Cell 2.0 Nos", response.data["opening"]["materials"])
+        self.assertIn("Assembly 4.0 Hour", response.data["opening"]["services"])
+
+    def test_quote_after_quotation_moves_from_hod_to_md_and_then_to_job_card_queue(self):
+        standard_quotation, _, _ = self.create_quotation_record("0902", sent_to_head=True)
+        quote_after_quotation, _, _ = self.create_quotation_record(
+            "0903",
+            planning_type="quote_after",
+            sent_to_head=True,
+        )
+
+        regular_hod_queue = self.client.get("/api/quotation/", {"workflow": "hod"})
+        self.assertEqual(regular_hod_queue.status_code, 200)
+        self.assertTrue(any(row["id"] == standard_quotation.id for row in regular_hod_queue.data))
+        self.assertFalse(any(row["id"] == quote_after_quotation.id for row in regular_hod_queue.data))
+
+        quote_after_hod_queue = self.client.get(
+            "/api/quotation/",
+            {"workflow": "hod", "planningType": "quote_after"},
+        )
+        self.assertEqual(quote_after_hod_queue.status_code, 200)
+        self.assertEqual([row["id"] for row in quote_after_hod_queue.data], [quote_after_quotation.id])
+
+        hod_user, _ = self.create_role_user("hod-quote-after", ROLE_HOD)
+        md_user, _ = self.create_role_user("md-quote-after", ROLE_MD)
+        hod_client = self.get_authenticated_client_for_user(hod_user)
+        md_client = self.get_authenticated_client_for_user(md_user)
+
+        hod_review = hod_client.post(
+            f"/api/quotation/{quote_after_quotation.id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Quote after approved by HOD.",
+            },
+            format="json",
+        )
+        self.assertEqual(hod_review.status_code, 200)
+
+        regular_md_queue = self.client.get("/api/quotation/", {"workflow": "md"})
+        self.assertEqual(regular_md_queue.status_code, 200)
+        self.assertFalse(any(row["id"] == quote_after_quotation.id for row in regular_md_queue.data))
+
+        quote_after_md_queue = self.client.get(
+            "/api/quotation/",
+            {"workflow": "md", "planningType": "quote_after"},
+        )
+        self.assertEqual(quote_after_md_queue.status_code, 200)
+        self.assertEqual([row["id"] for row in quote_after_md_queue.data], [quote_after_quotation.id])
+
+        md_review = md_client.post(
+            f"/api/quotation/{quote_after_quotation.id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Quote after approved by MD.",
+            },
+            format="json",
+        )
+        self.assertEqual(md_review.status_code, 200)
+
+        quote_after_quotation.refresh_from_db()
+        self.assertTrue(quote_after_quotation.uses_direct_job_card_flow())
+
+        queue_response = self.client.get("/api/job-card/queue/")
+        self.assertEqual(queue_response.status_code, 200)
+        queue_row = next(
+            row for row in queue_response.data if row["quotationId"] == quote_after_quotation.id
+        )
+        self.assertEqual(queue_row["queueType"], "quotation")
+        self.assertEqual(queue_row["workflowLabel"], "Quote After")
+        self.assertIsNone(queue_row["purchaseOrderId"])
+
+    def test_quote_after_quotation_can_open_direct_job_card_without_purchase_order(self):
+        quotation, _, _ = self.create_quotation_record(
+            "0904",
+            planning_type="quote_after",
+            sent_to_head=True,
+            hod_status=Quotation.APPROVAL_APPROVED,
+            md_status=Quotation.APPROVAL_APPROVED,
+        )
+
+        response = self.client.post(
+            "/api/job-card/",
+            {
+                "quotationId": quotation.id,
+                "jobCardDate": "2026-03-28",
+                "planningDate": "2026-03-29",
+                "expectedDate": "2026-03-30",
+                "remarks": "Quote after job card",
+                "deliveryRemark": "Deliver after completion",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        job_card = JobCard.objects.get(id=response.data["data"]["id"])
+        self.assertIsNone(job_card.purchaseOrder)
+        self.assertEqual(job_card.quotation_id, quotation.id)
+
+    def test_direct_job_card_can_be_created_from_special_rfq_quotation(self):
+        request_item = SalesServiceRequest.objects.create(
+            referenceNo="RF-26-0901",
+            rfqType="onsite",
+            rfqCategory="quote_of_completion",
+            salesExecutive="sales_executive_1",
+            modeOfContact="phone",
+            requestDate="2026-03-28",
+            requiredDeliveryDate="2026-03-30",
+            clientName="Direct Queue Client",
+            companyName="Direct Queue Company",
+            phoneNo="9876543210",
+            email="",
+            requestType="service",
+            batteryServices=["Battery Inspection"],
+            scopeArea="Battery Inspection",
+            planningType="verbal",
+            planStartDate="2026-03-28",
+            planEndDate="2026-03-29",
+            paymentTerms="Advance",
+            taxPreference="GST Extra",
+            deliveryLocation="Tiruppur",
+            deliveryMode="Courier",
+        )
+        quotation = Quotation.objects.create(
+            salesServiceRequest=request_item,
+            quotationCode="QUOTE-26-0901",
+            quotationDate="2026-03-28",
+            expiryDate="2026-03-28",
+            quoteValidityDays=0,
+            revisedNo=0,
+            attentionName=request_item.clientName,
+            companyName=request_item.companyName,
+            referenceNo=request_item.referenceNo,
+            costEstimationNo="",
+            scopeDetails=["Battery Inspection"],
+            rfqScope=["Battery Inspection"],
+            rfqRemarks="Direct workflow",
+            rfqContactMode="phone",
+            costBreakdown={"subtotal": 0, "finalBatteryCost": 0},
+            totalCost=0,
+            sentToHead=True,
+            hodStatus=Quotation.APPROVAL_APPROVED,
+            mdStatus=Quotation.APPROVAL_APPROVED,
+        )
+
+        response = self.client.post(
+            "/api/job-card/",
+            {
+                "quotationId": quotation.id,
+                "jobCardDate": "2026-03-28",
+                "planningDate": "2026-03-29",
+                "expectedDate": "2026-03-30",
+                "remarks": "Direct job card",
+                "deliveryRemark": "Deliver directly",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        job_card = JobCard.objects.get(id=response.data["data"]["id"])
+        self.assertIsNone(job_card.purchaseOrder)
+        self.assertEqual(job_card.quotation_id, quotation.id)
+
+    def test_admin_login_returns_site_engineer_role_and_queue_access(self):
+        request_item = SalesServiceRequest.objects.create(
+            referenceNo="RF-26-0910",
+            rfqType="workshop",
+            rfqCategory="quote_of_completion",
+            salesExecutive="sales_executive_1",
+            modeOfContact="phone",
+            requestDate="2026-03-28",
+            requiredDeliveryDate="2026-03-30",
+            clientName="Site Engineer Client",
+            companyName="Site Engineer Company",
+            phoneNo="9876543210",
+            email="",
+            requestType="service",
+            batteryServices=["Battery Testing"],
+            scopeArea="Battery Testing",
+            planningType="verbal",
+            planStartDate="2026-03-28",
+            planEndDate="2026-03-29",
+            paymentTerms="Advance",
+            taxPreference="GST Extra",
+            deliveryLocation="Tiruppur",
+            deliveryMode="Courier",
+        )
+        quotation = Quotation.objects.create(
+            salesServiceRequest=request_item,
+            quotationCode="QUOTE-26-0910",
+            quotationDate="2026-03-28",
+            expiryDate="2026-03-28",
+            quoteValidityDays=0,
+            revisedNo=0,
+            attentionName=request_item.clientName,
+            companyName=request_item.companyName,
+            referenceNo=request_item.referenceNo,
+            costEstimationNo="",
+            scopeDetails=["Battery Testing"],
+            rfqScope=["Battery Testing"],
+            rfqRemarks="Direct workflow",
+            rfqContactMode="phone",
+            costBreakdown={"subtotal": 0, "finalBatteryCost": 0},
+            totalCost=0,
+            sentToHead=True,
+            hodStatus=Quotation.APPROVAL_APPROVED,
+            mdStatus=Quotation.APPROVAL_APPROVED,
+        )
+        workflow_user, password = self.create_role_user(
+            "site-login",
+            ROLE_SITE_ENGINEER,
+            password="SiteEngineer@123",
+        )
+        anonymous_client = APIClient()
+
+        login_response = anonymous_client.post(
+            "/api/admin-login/",
+            {
+                "username": workflow_user.username,
+                "password": password,
+            },
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, 200)
+        self.assertEqual(login_response.data["user"]["roles"], [ROLE_SITE_ENGINEER])
+
+        site_engineer_client = self.get_authenticated_client_for_user(workflow_user)
+        queue_response = site_engineer_client.get("/api/job-card/queue/")
+        self.assertEqual(queue_response.status_code, 200)
+        self.assertTrue(any(row["quotationId"] == quotation.id for row in queue_response.data))
+
+        opening_response = site_engineer_client.get(
+            f"/api/job-card/opening/quotation/{quotation.id}/"
+        )
+        self.assertEqual(opening_response.status_code, 200)
+
+    def test_sales_executive_can_prepare_rfq_but_not_cost_estimation(self):
+        sales_executive, _ = self.create_role_user(
+            "salesexec-rfq",
+            ROLE_SALES_EXECUTIVE,
+        )
+        sales_client = self.get_authenticated_client_for_user(sales_executive)
+
+        rfq_response = sales_client.post(
+            "/api/sales-service/",
+            self.sales_service_payload,
+            format="json",
+        )
+        self.assertEqual(rfq_response.status_code, 201)
+
+        request_id = rfq_response.data["data"]["id"]
+        cost_estimation_response = sales_client.post(
+            "/api/cost-estimation/sheets/",
+            {
+                "salesServiceRequestId": request_id,
+                "taxPercentage": 18,
+                "profitMarginPercentage": 10,
+                "rows": [
+                    {
+                        "section": "raw_material",
+                        "itemName": "Lithium",
+                        "secondaryLabel": "Category",
+                        "secondaryValue": "Chemical",
+                        "unit": "kg",
+                        "rate": 1200,
+                        "quantity": 2,
+                        "total": 2400,
+                        "displayOrder": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(cost_estimation_response.status_code, 403)
+
+    def test_cost_estimation_review_requires_matching_hod_and_md_roles(self):
+        request_response = self.client.post(
+            "/api/sales-service/",
+            self.sales_service_payload,
+            format="json",
+        )
+        request_id = request_response.data["data"]["id"]
+
+        lead_sales, _ = self.create_role_user("lead-cost", ROLE_LEAD_SALES)
+        lead_sales_client = self.get_authenticated_client_for_user(lead_sales)
+        sheet_response = lead_sales_client.post(
+            "/api/cost-estimation/sheets/",
+            {
+                "salesServiceRequestId": request_id,
+                "taxPercentage": 18,
+                "profitMarginPercentage": 10,
+                "rows": [
+                    {
+                        "section": "raw_material",
+                        "itemName": "Lithium",
+                        "secondaryLabel": "Category",
+                        "secondaryValue": "Chemical",
+                        "unit": "kg",
+                        "rate": 1200,
+                        "quantity": 2,
+                        "total": 2400,
+                        "displayOrder": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(sheet_response.status_code, 201)
+        sheet_id = sheet_response.data["data"]["id"]
+
+        send_response = lead_sales_client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/send-to-head/",
+            {},
+            format="json",
+        )
+        self.assertEqual(send_response.status_code, 200)
+
+        hod_user, _ = self.create_role_user("hod-cost", ROLE_HOD)
+        md_user, _ = self.create_role_user("md-cost", ROLE_MD)
+        hod_client = self.get_authenticated_client_for_user(hod_user)
+        md_client = self.get_authenticated_client_for_user(md_user)
+
+        wrong_stage_response = md_client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Trying to approve as MD.",
+            },
+            format="json",
+        )
+        self.assertEqual(wrong_stage_response.status_code, 403)
+
+        hod_review_response = hod_client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Approved by HOD.",
+            },
+            format="json",
+        )
+        self.assertEqual(hod_review_response.status_code, 200)
+
+        blocked_md_stage_response = hod_client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Trying to approve MD stage as HOD.",
+            },
+            format="json",
+        )
+        self.assertEqual(blocked_md_stage_response.status_code, 403)
+
+        md_review_response = md_client.post(
+            f"/api/cost-estimation/sheets/{sheet_id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Approved by MD.",
+            },
+            format="json",
+        )
+        self.assertEqual(md_review_response.status_code, 200)
+
+    def test_quotation_review_requires_matching_hod_and_md_roles(self):
+        quotation, _, _ = self.create_quotation_record("0299", sent_to_head=True)
+        hod_user, _ = self.create_role_user("hod-quote", ROLE_HOD)
+        md_user, _ = self.create_role_user("md-quote", ROLE_MD)
+        hod_client = self.get_authenticated_client_for_user(hod_user)
+        md_client = self.get_authenticated_client_for_user(md_user)
+
+        wrong_stage_response = md_client.post(
+            f"/api/quotation/{quotation.id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Trying to approve HOD stage as MD.",
+            },
+            format="json",
+        )
+        self.assertEqual(wrong_stage_response.status_code, 403)
+
+        hod_review_response = hod_client.post(
+            f"/api/quotation/{quotation.id}/review/",
+            {
+                "stage": "hod",
+                "status": "approved",
+                "comment": "Approved by HOD.",
+            },
+            format="json",
+        )
+        self.assertEqual(hod_review_response.status_code, 200)
+
+        blocked_md_stage_response = hod_client.post(
+            f"/api/quotation/{quotation.id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Trying to approve MD stage as HOD.",
+            },
+            format="json",
+        )
+        self.assertEqual(blocked_md_stage_response.status_code, 403)
+
+        md_review_response = md_client.post(
+            f"/api/quotation/{quotation.id}/review/",
+            {
+                "stage": "md",
+                "status": "approved",
+                "comment": "Approved by MD.",
+            },
+            format="json",
+        )
+        self.assertEqual(md_review_response.status_code, 200)
 
     def test_build_invoice_context_converts_values_for_selected_currency(self):
         context = _build_invoice_context(

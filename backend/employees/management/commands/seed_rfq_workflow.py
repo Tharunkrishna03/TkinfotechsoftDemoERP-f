@@ -12,6 +12,9 @@ from employees.views import (
 
 
 DEFAULT_RFQ_TEMPLATE = {
+    "rfqType": "workshop",
+    "rfqCategory": "standard",
+    "salesExecutive": "sales_executive_1",
     "modeOfContact": "",
     "emailReferenceNumber": "MARINE-REF-DUPLICATE",
     "clientName": "Port Engineer",

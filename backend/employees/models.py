@@ -125,8 +125,50 @@ class SalesServiceRequest(models.Model):
         (REQUEST_TYPE_MANUFACTURING, "Manufacturing"),
         (REQUEST_TYPE_SERVICE, "Service"),
     )
+    RFQ_TYPE_WORKSHOP = "workshop"
+    RFQ_TYPE_SPARE = "spare"
+    RFQ_TYPE_ONSITE = "onsite"
+    RFQ_TYPE_CHOICES = (
+        (RFQ_TYPE_WORKSHOP, "Workshop"),
+        (RFQ_TYPE_SPARE, "Spare"),
+        (RFQ_TYPE_ONSITE, "Onsite"),
+    )
+    RFQ_CATEGORY_STANDARD = "standard"
+    RFQ_CATEGORY_QUOTE_OF_ASSESSMENT = "quote_of_assessment"
+    RFQ_CATEGORY_QUOTE_OF_COMPLETION = "quote_of_completion"
+    RFQ_CATEGORY_CHOICES = (
+        (RFQ_CATEGORY_STANDARD, "Standard"),
+        (RFQ_CATEGORY_QUOTE_OF_ASSESSMENT, "Quote of assessment"),
+        (RFQ_CATEGORY_QUOTE_OF_COMPLETION, "Quote of completion"),
+    )
+    SALES_EXECUTIVE_MEMBER_1 = "sales_executive_1"
+    SALES_EXECUTIVE_MEMBER_2 = "sales_executive_2"
+    SALES_EXECUTIVE_MEMBER_3 = "sales_executive_3"
+    SALES_EXECUTIVE_CHOICES = (
+        (SALES_EXECUTIVE_MEMBER_1, "Sales Executive 1"),
+        (SALES_EXECUTIVE_MEMBER_2, "Sales Executive 2"),
+        (SALES_EXECUTIVE_MEMBER_3, "Sales Executive 3"),
+    )
 
     referenceNo = models.CharField(max_length=20, unique=True)
+    rfqType = models.CharField(
+        max_length=20,
+        choices=RFQ_TYPE_CHOICES,
+        blank=True,
+        default="",
+    )
+    rfqCategory = models.CharField(
+        max_length=30,
+        choices=RFQ_CATEGORY_CHOICES,
+        blank=True,
+        default="",
+    )
+    salesExecutive = models.CharField(
+        max_length=30,
+        choices=SALES_EXECUTIVE_CHOICES,
+        blank=True,
+        default="",
+    )
     modeOfContact = models.CharField(
         max_length=20,
         choices=CONTACT_MODE_CHOICES,
@@ -256,6 +298,157 @@ class Quotation(models.Model):
 
     def __str__(self):
         return self.quotationCode or f"Quotation {self.pk}"
+
+    def get_overall_status(self):
+        if (
+            self.hodStatus == self.APPROVAL_APPROVED
+            and self.mdStatus == self.APPROVAL_APPROVED
+        ):
+            return self.APPROVAL_APPROVED
+
+        if (
+            self.hodStatus == self.APPROVAL_DECLINED
+            or self.mdStatus == self.APPROVAL_DECLINED
+        ):
+            return self.APPROVAL_DECLINED
+
+        return self.APPROVAL_PENDING
+
+    def is_locked_for_editing(self):
+        return self.is_workflow_locked()
+
+    def is_workflow_locked(self):
+        overall_status = self.get_overall_status()
+
+        if (
+            overall_status == self.APPROVAL_APPROVED
+            and self.clientStatus != self.CLIENT_STATUS_REJECTED
+        ):
+            return True
+
+        return self.sentToHead and overall_status == self.APPROVAL_PENDING
+
+    def can_create_purchase_order(self):
+        if self.get_overall_status() != self.APPROVAL_APPROVED:
+            return False
+
+        if self.clientStatus != self.CLIENT_STATUS_ACCEPTED:
+            return False
+
+        return not hasattr(self, "purchaseOrder")
+
+    def uses_direct_job_card_flow(self):
+        request_item = getattr(self, "salesServiceRequest", None)
+        if request_item is None:
+            return False
+
+        if request_item.planningType == SalesServiceRequest.PLANNING_TYPE_QUOTE_AFTER:
+            return True
+
+        return request_item.rfqCategory in {
+            SalesServiceRequest.RFQ_CATEGORY_QUOTE_OF_ASSESSMENT,
+            SalesServiceRequest.RFQ_CATEGORY_QUOTE_OF_COMPLETION,
+        }
+
+    def can_enter_direct_job_card_queue(self):
+        if not self.uses_direct_job_card_flow():
+            return False
+
+        if hasattr(self, "purchaseOrder") or hasattr(self, "jobCard"):
+            return False
+
+        return self.get_overall_status() == self.APPROVAL_APPROVED
+
+
+class PurchaseOrder(models.Model):
+    quotation = models.OneToOneField(
+        Quotation,
+        on_delete=models.PROTECT,
+        related_name="purchaseOrder",
+    )
+    purchaseOrderNo = models.CharField(max_length=20, unique=True)
+    poDate = models.DateField()
+    poReceivedDate = models.DateField()
+    expectedDate = models.DateField()
+    poReference = models.FileField(upload_to="purchase-orders/")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+
+    def __str__(self):
+        return self.purchaseOrderNo or f"Purchase Order {self.pk}"
+
+
+class JobCard(models.Model):
+    purchaseOrder = models.OneToOneField(
+        PurchaseOrder,
+        on_delete=models.PROTECT,
+        related_name="jobCard",
+        null=True,
+        blank=True,
+    )
+    quotation = models.OneToOneField(
+        Quotation,
+        on_delete=models.PROTECT,
+        related_name="jobCard",
+        null=True,
+        blank=True,
+    )
+    jobCardNo = models.CharField(max_length=20, unique=True)
+    jobCardDate = models.DateField()
+    planningDate = models.DateField(blank=True, null=True)
+    expectedDate = models.DateField(blank=True, null=True)
+    remarks = models.TextField(blank=True, default="")
+    deliveryRemark = models.TextField(blank=True, default="")
+    grnNo = models.CharField(max_length=20, blank=True, default="")
+    sentToStoreManager = models.BooleanField(default=False)
+    storeManagerApproved = models.BooleanField(default=False)
+    storeManagerComment = models.TextField(blank=True, default="")
+    sentToHod = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+
+    def __str__(self):
+        return self.jobCardNo or f"Job Card {self.pk}"
+
+
+class OperationRegister(models.Model):
+    SHOP_FLOOR_INCHARGE_SUPERVISOR_1 = "supervisor_1"
+    SHOP_FLOOR_INCHARGE_SUPERVISOR_2 = "supervisor_2"
+    SHOP_FLOOR_INCHARGE_SUPERVISOR_3 = "supervisor_3"
+    SHOP_FLOOR_INCHARGE_CHOICES = (
+        (SHOP_FLOOR_INCHARGE_SUPERVISOR_1, "Supervisor 1"),
+        (SHOP_FLOOR_INCHARGE_SUPERVISOR_2, "Supervisor 2"),
+        (SHOP_FLOOR_INCHARGE_SUPERVISOR_3, "Supervisor 3"),
+    )
+
+    jobCard = models.OneToOneField(
+        JobCard,
+        on_delete=models.PROTECT,
+        related_name="operationRegister",
+    )
+    operationNo = models.CharField(max_length=20, unique=True)
+    opDate = models.DateField()
+    shopFloorIncharge = models.CharField(
+        max_length=30,
+        choices=SHOP_FLOOR_INCHARGE_CHOICES,
+        blank=True,
+        default="",
+    )
+    remarks = models.TextField(blank=True, default="")
+    assignedToSiteEngineer = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+
+    def __str__(self):
+        return self.operationNo or f"Operation Register {self.pk}"
 
 
 class CostEstimationRate(models.Model):

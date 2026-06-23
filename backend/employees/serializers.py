@@ -9,8 +9,11 @@ from .models import (
     DispatchSummary,
     Item,
     ItemFolder,
+    JobCard,
+    OperationRegister,
     OpeningStock,
     OpeningStockRow,
+    PurchaseOrder,
     Quotation,
     SalesServiceRequest,
 )
@@ -85,6 +88,191 @@ def _split_non_empty_lines(value):
     return [line.strip() for line in str(value or "").splitlines() if line.strip()]
 
 
+def _deduplicate_lines(values):
+    unique_values = []
+    for value in values:
+        label = _stringify(value)
+        if label and label not in unique_values:
+            unique_values.append(label)
+    return unique_values
+
+
+def _format_material_or_service_line(item_name="", quantity=None, unit=""):
+    parts = [_stringify(item_name)]
+
+    if quantity not in ("", None, 0, "0"):
+        parts.append(_stringify(quantity))
+
+    unit_value = _stringify(unit)
+    if unit_value:
+        parts.append(unit_value)
+
+    return " ".join(part for part in parts if part).strip()
+
+
+def _get_job_card_source_purchase_order(source):
+    return getattr(source, "purchaseOrder", None) if isinstance(source, JobCard) else (
+        source if isinstance(source, PurchaseOrder) else None
+    )
+
+
+def _get_job_card_source_quotation(source):
+    if isinstance(source, Quotation):
+        return source
+
+    direct_quotation = getattr(source, "quotation", None)
+    if direct_quotation is not None:
+        return direct_quotation
+
+    purchase_order = _get_job_card_source_purchase_order(source)
+    if purchase_order is not None:
+        return getattr(purchase_order, "quotation", None)
+
+    return None
+
+
+def _get_job_card_source_request_item(source):
+    quotation = _get_job_card_source_quotation(source)
+    if quotation is None:
+        return None
+    return getattr(quotation, "salesServiceRequest", None)
+
+
+def _job_card_requires_store_manager_approval(source):
+    request_item = _get_job_card_source_request_item(source)
+    return (
+        request_item is not None
+        and getattr(request_item, "rfqType", "") == SalesServiceRequest.RFQ_TYPE_WORKSHOP
+    )
+
+
+def _get_job_card_cost_estimation_sheet(source):
+    quotation = _get_job_card_source_quotation(source)
+    if quotation is None:
+        return None
+
+    sheet = getattr(quotation, "costEstimationSheet", None)
+    if sheet is not None:
+        return sheet
+
+    request_item = getattr(quotation, "salesServiceRequest", None)
+    if request_item is None:
+        return None
+
+    latest_sheet = request_item.costEstimationSheets.order_by("-created_at", "-id").first()
+    if latest_sheet is not None and latest_sheet.get_overall_status() == CostEstimationSheet.APPROVAL_APPROVED:
+        return latest_sheet
+
+    return None
+
+
+def _build_job_card_cost_estimation_lines(source, included_sections):
+    sheet = _get_job_card_cost_estimation_sheet(source)
+    if sheet is None:
+        return []
+
+    rows = list(getattr(sheet, "rows", []).all()) if hasattr(getattr(sheet, "rows", None), "all") else []
+    if not rows:
+        return []
+
+    lines = []
+    for row in rows:
+        if included_sections and row.section not in included_sections:
+            continue
+
+        line = _format_material_or_service_line(row.itemName, row.quantity, row.unit)
+        if line:
+            lines.append(line)
+
+    return _deduplicate_lines(lines)
+
+
+def _build_job_card_scope_lines(source):
+    quotation = _get_job_card_source_quotation(source)
+    request_item = _get_job_card_source_request_item(source)
+    scope_details = []
+
+    if quotation is not None and isinstance(getattr(quotation, "rfqScope", None), list):
+        scope_details.extend(quotation.rfqScope)
+    elif quotation is not None and isinstance(getattr(quotation, "scopeDetails", None), list):
+        scope_details.extend(quotation.scopeDetails)
+
+    if request_item is not None and not scope_details:
+        scope_details.extend(_split_non_empty_lines(getattr(request_item, "scopeArea", "")))
+        scope_details.extend(getattr(request_item, "batteryServices", []) or [])
+
+    return _deduplicate_lines(scope_details)
+
+
+def _build_job_card_scope_details(source):
+    scope_details = _build_job_card_scope_lines(source)
+
+    excluded_lines = set(
+        _build_job_card_materials(source) + _build_job_card_services(source)
+    )
+
+    return [
+        line
+        for line in scope_details
+        if line not in excluded_lines
+    ]
+
+
+def _build_job_card_materials(source):
+    request_item = _get_job_card_source_request_item(source)
+    materials = _build_job_card_cost_estimation_lines(source, {"raw_material"})
+
+    if materials:
+        return materials
+
+    if request_item is None:
+        return materials
+
+    for manufacturing_item in getattr(request_item, "manufacturingItems", []) or []:
+        if not isinstance(manufacturing_item, dict):
+            continue
+
+        material_line = _format_material_or_service_line(
+            manufacturing_item.get("itemName"),
+            manufacturing_item.get("quantity"),
+            manufacturing_item.get("unit"),
+        )
+        if material_line:
+            materials.append(material_line)
+
+    if not materials:
+        fallback_line = _format_material_or_service_line(
+            getattr(request_item, "itemName", ""),
+            getattr(request_item, "quantity", None),
+            getattr(request_item, "unit", ""),
+        )
+        if fallback_line:
+            materials.append(fallback_line)
+
+    return _deduplicate_lines(materials)
+
+
+def _build_job_card_services(source):
+    request_item = _get_job_card_source_request_item(source)
+    services = _build_job_card_cost_estimation_lines(
+        source,
+        {"manufacturing", "labor", "testing", "packaging"},
+    )
+
+    if services:
+        return services
+
+    if request_item is None:
+        return services
+
+    services.extend(getattr(request_item, "batteryServices", []) or [])
+
+    if getattr(request_item, "requestType", "") == SalesServiceRequest.REQUEST_TYPE_SERVICE:
+        services.extend(_split_non_empty_lines(getattr(request_item, "scopeArea", "")))
+
+    return _deduplicate_lines(services)
+
+
 def _merge_scope_area(services, scope_area):
     manual_lines = [
         line for line in _split_non_empty_lines(scope_area) if line not in BATTERY_SERVICE_OPTIONS
@@ -140,6 +328,21 @@ class DispatchSummarySerializer(serializers.ModelSerializer):
 
 
 class SalesServiceRequestSerializer(serializers.ModelSerializer):
+    rfqType = serializers.ChoiceField(
+        choices=SalesServiceRequest.RFQ_TYPE_CHOICES,
+        required=False,
+        allow_blank=True,
+    )
+    rfqCategory = serializers.ChoiceField(
+        choices=SalesServiceRequest.RFQ_CATEGORY_CHOICES,
+        required=False,
+        allow_blank=True,
+    )
+    salesExecutive = serializers.ChoiceField(
+        choices=SalesServiceRequest.SALES_EXECUTIVE_CHOICES,
+        required=False,
+        allow_blank=True,
+    )
     modeOfContact = serializers.ChoiceField(
         choices=SalesServiceRequest.CONTACT_MODE_CHOICES,
         required=False,
@@ -179,11 +382,22 @@ class SalesServiceRequestSerializer(serializers.ModelSerializer):
     deliveryLocation = serializers.CharField(required=False, allow_blank=True)
     deliveryMode = serializers.CharField(required=False, allow_blank=True)
     clientImage = serializers.FileField(required=False, allow_null=True)
+    hasCostEstimation = serializers.SerializerMethodField()
+    hasQuotation = serializers.SerializerMethodField()
+    hasPurchaseOrder = serializers.SerializerMethodField()
+    purchaseOrderNo = serializers.SerializerMethodField()
 
     class Meta:
         model = SalesServiceRequest
         fields = "__all__"
-        read_only_fields = ("id", "created_at")
+        read_only_fields = (
+            "id",
+            "created_at",
+            "hasCostEstimation",
+            "hasQuotation",
+            "hasPurchaseOrder",
+            "purchaseOrderNo",
+        )
 
     def _get_existing_value(self, field_name, default=""):
         if not self.instance:
@@ -253,6 +467,15 @@ class SalesServiceRequestSerializer(serializers.ModelSerializer):
             "requiredDeliveryDate",
             self._get_existing_value("requiredDeliveryDate", None),
         )
+        rfq_type = _stringify(
+            attrs.get("rfqType", self._get_existing_value("rfqType", "")),
+        ).lower()
+        rfq_category = _stringify(
+            attrs.get("rfqCategory", self._get_existing_value("rfqCategory", "")),
+        ).lower()
+        sales_executive = _stringify(
+            attrs.get("salesExecutive", self._get_existing_value("salesExecutive", "")),
+        ).lower()
         mode_of_contact = _stringify(
             attrs.get("modeOfContact", self._get_existing_value("modeOfContact", "")),
         ).lower()
@@ -320,6 +543,15 @@ class SalesServiceRequestSerializer(serializers.ModelSerializer):
                 "Required delivery date cannot be before the request date."
             )
 
+        if not rfq_type:
+            errors["rfqType"] = "Select the RFQ type."
+
+        if not rfq_category:
+            errors["rfqCategory"] = "Select the RFQ category."
+
+        if not sales_executive:
+            errors["salesExecutive"] = "Select the sales executive."
+
         if not request_type:
             if battery_services:
                 request_type = SalesServiceRequest.REQUEST_TYPE_SERVICE
@@ -365,14 +597,8 @@ class SalesServiceRequestSerializer(serializers.ModelSerializer):
                 service_name = _stringify(raw_service)
                 if not service_name:
                     continue
-                if service_name not in BATTERY_SERVICE_OPTIONS:
-                    errors["batteryServices"] = "Select valid battery related services."
-                    break
                 if service_name not in normalised_services:
                     normalised_services.append(service_name)
-
-            if not normalised_services and "batteryServices" not in errors:
-                errors["batteryServices"] = "Select at least one battery related service."
 
             attrs["batteryServices"] = normalised_services
             attrs["manufacturingItems"] = []
@@ -412,6 +638,13 @@ class SalesServiceRequestSerializer(serializers.ModelSerializer):
             if not unit:
                 errors["unit"] = "Unit is required."
 
+        if (
+            rfq_category != SalesServiceRequest.RFQ_CATEGORY_STANDARD
+            and request_date
+        ):
+            plan_start_date = request_date
+            plan_end_date = request_date
+
         if planning_type or plan_start_date or plan_end_date or planning_remarks:
             if not planning_type:
                 errors["planningType"] = "Select the planning type."
@@ -425,6 +658,9 @@ class SalesServiceRequestSerializer(serializers.ModelSerializer):
         attrs["phoneNo"] = phone_no
         attrs["email"] = email
         attrs["emailReferenceNumber"] = email_reference_number
+        attrs["rfqType"] = rfq_type
+        attrs["rfqCategory"] = rfq_category
+        attrs["salesExecutive"] = sales_executive
         attrs["itemName"] = item_name
         attrs["quantity"] = int(quantity or 0)
         attrs["unit"] = unit
@@ -471,6 +707,40 @@ class SalesServiceRequestSerializer(serializers.ModelSerializer):
 
         raise serializers.ValidationError("Upload a PDF file only.")
 
+    def get_hasCostEstimation(self, obj):
+        prefetched_objects = getattr(obj, "_prefetched_objects_cache", {})
+        if "costEstimationSheets" in prefetched_objects:
+            return bool(prefetched_objects["costEstimationSheets"])
+        return obj.costEstimationSheets.exists()
+
+    def get_hasQuotation(self, obj):
+        prefetched_objects = getattr(obj, "_prefetched_objects_cache", {})
+        if "quotations" in prefetched_objects:
+            return bool(prefetched_objects["quotations"])
+        return obj.quotations.exists()
+
+    def get_hasPurchaseOrder(self, obj):
+        prefetched_objects = getattr(obj, "_prefetched_objects_cache", {})
+        if "quotations" in prefetched_objects:
+            return any(hasattr(quotation, "purchaseOrder") for quotation in prefetched_objects["quotations"])
+        return PurchaseOrder.objects.filter(quotation__salesServiceRequest=obj).exists()
+
+    def get_purchaseOrderNo(self, obj):
+        prefetched_objects = getattr(obj, "_prefetched_objects_cache", {})
+        if "quotations" in prefetched_objects:
+            for quotation in prefetched_objects["quotations"]:
+                purchase_order = getattr(quotation, "purchaseOrder", None)
+                if purchase_order is not None:
+                    return purchase_order.purchaseOrderNo or ""
+            return ""
+
+        return (
+            PurchaseOrder.objects.filter(quotation__salesServiceRequest=obj)
+            .values_list("purchaseOrderNo", flat=True)
+            .first()
+            or ""
+        )
+
 
 class QuotationSerializer(serializers.ModelSerializer):
     salesServiceRequestId = serializers.PrimaryKeyRelatedField(
@@ -498,6 +768,17 @@ class QuotationSerializer(serializers.ModelSerializer):
     quoteValidityDays = BlankableIntegerField(required=False, allow_null=True, min_value=0)
     revisedNo = BlankableIntegerField(required=False, allow_null=True, min_value=0)
     revisionNo = serializers.IntegerField(source="revisedNo", read_only=True)
+    overallStatus = serializers.SerializerMethodField(method_name="get_overall_status")
+    hasPurchaseOrder = serializers.SerializerMethodField()
+    purchaseOrderId = serializers.SerializerMethodField()
+    purchaseOrderNo = serializers.SerializerMethodField()
+    hasJobCard = serializers.SerializerMethodField()
+    jobCardId = serializers.SerializerMethodField()
+    jobCardNo = serializers.SerializerMethodField()
+    workflowNotice = serializers.SerializerMethodField()
+    rfqCategory = serializers.CharField(source="salesServiceRequest.rfqCategory", read_only=True)
+    rfqCategoryLabel = serializers.SerializerMethodField()
+    planningType = serializers.CharField(source="salesServiceRequest.planningType", read_only=True)
     paymentTermsType = serializers.CharField(required=False, allow_blank=True)
     paymentTerms = serializers.CharField(required=False, allow_blank=True)
     deliveryTermsType = serializers.CharField(required=False, allow_blank=True)
@@ -517,10 +798,21 @@ class QuotationSerializer(serializers.ModelSerializer):
             "salesServiceRequest",
             "costEstimationSheet",
             "revisionNo",
+            "overallStatus",
             "rfqScope",
             "rfqRemarks",
             "rfqContactMode",
             "costBreakdown",
+            "hasPurchaseOrder",
+            "purchaseOrderId",
+            "purchaseOrderNo",
+            "hasJobCard",
+            "jobCardId",
+            "jobCardNo",
+            "workflowNotice",
+            "rfqCategory",
+            "rfqCategoryLabel",
+            "planningType",
         )
 
     def _get_existing_value(self, field_name, default=None):
@@ -718,6 +1010,13 @@ class QuotationSerializer(serializers.ModelSerializer):
 
         if sales_service_request is None:
             errors["salesServiceRequestId"] = "Select an attention name."
+        elif (
+            sales_service_request.rfqCategory
+            != SalesServiceRequest.RFQ_CATEGORY_STANDARD
+        ):
+            errors["salesServiceRequestId"] = (
+                "Quotations for quote of assessment and quote of completion RFQs are created automatically."
+            )
 
         latest_approved_cost_estimation = None
         if sales_service_request is not None:
@@ -814,6 +1113,656 @@ class QuotationSerializer(serializers.ModelSerializer):
             attrs["costEstimationNo"] = _stringify(cost_estimation_sheet.costEstimationNo)
 
         return attrs
+
+    def get_overall_status(self, obj):
+        return obj.get_overall_status()
+
+    def get_hasPurchaseOrder(self, obj):
+        return hasattr(obj, "purchaseOrder")
+
+    def get_purchaseOrderId(self, obj):
+        purchase_order = getattr(obj, "purchaseOrder", None)
+        return purchase_order.id if purchase_order is not None else None
+
+    def get_purchaseOrderNo(self, obj):
+        purchase_order = getattr(obj, "purchaseOrder", None)
+        return purchase_order.purchaseOrderNo if purchase_order is not None else ""
+
+    def get_hasJobCard(self, obj):
+        return hasattr(obj, "jobCard") or hasattr(getattr(obj, "purchaseOrder", None), "jobCard")
+
+    def get_jobCardId(self, obj):
+        job_card = getattr(obj, "jobCard", None)
+        if job_card is not None:
+            return job_card.id
+
+        purchase_order = getattr(obj, "purchaseOrder", None)
+        linked_job_card = getattr(purchase_order, "jobCard", None)
+        return linked_job_card.id if linked_job_card is not None else None
+
+    def get_jobCardNo(self, obj):
+        job_card = getattr(obj, "jobCard", None)
+        if job_card is not None:
+            return job_card.jobCardNo or ""
+
+        purchase_order = getattr(obj, "purchaseOrder", None)
+        linked_job_card = getattr(purchase_order, "jobCard", None)
+        return linked_job_card.jobCardNo if linked_job_card is not None else ""
+
+    def get_workflowNotice(self, obj):
+        direct_job_card = getattr(obj, "jobCard", None)
+        if direct_job_card is not None:
+            return f"Job card created as {direct_job_card.jobCardNo}."
+
+        purchase_order = getattr(obj, "purchaseOrder", None)
+        if purchase_order is None:
+            return ""
+        return f"Job card created as {purchase_order.purchaseOrderNo}."
+
+    def get_rfqCategoryLabel(self, obj):
+        request_item = getattr(obj, "salesServiceRequest", None)
+        if request_item is None:
+            return ""
+        return request_item.get_rfqCategory_display() or ""
+
+
+class PurchaseOrderSerializer(serializers.ModelSerializer):
+    quotationId = serializers.PrimaryKeyRelatedField(
+        queryset=Quotation.objects.select_related("salesServiceRequest", "costEstimationSheet"),
+        source="quotation",
+        write_only=True,
+        required=False,
+    )
+    quotationCode = serializers.CharField(source="quotation.quotationCode", read_only=True)
+    attentionName = serializers.CharField(source="quotation.attentionName", read_only=True)
+    companyName = serializers.CharField(source="quotation.companyName", read_only=True)
+    referenceNo = serializers.CharField(source="quotation.referenceNo", read_only=True)
+    costEstimationNo = serializers.CharField(source="quotation.costEstimationNo", read_only=True)
+    hasJobCard = serializers.SerializerMethodField()
+    jobCardId = serializers.SerializerMethodField()
+    jobCardNo = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PurchaseOrder
+        fields = (
+            "id",
+            "quotationId",
+            "quotation",
+            "quotationCode",
+            "attentionName",
+            "companyName",
+            "referenceNo",
+            "costEstimationNo",
+            "purchaseOrderNo",
+            "poDate",
+            "poReceivedDate",
+            "expectedDate",
+            "poReference",
+            "hasJobCard",
+            "jobCardId",
+            "jobCardNo",
+            "created_at",
+        )
+        read_only_fields = (
+            "id",
+            "quotation",
+            "quotationCode",
+            "attentionName",
+            "companyName",
+            "referenceNo",
+            "costEstimationNo",
+            "purchaseOrderNo",
+            "hasJobCard",
+            "jobCardId",
+            "jobCardNo",
+            "created_at",
+        )
+
+    def validate_poReference(self, value):
+        if not value and self.instance is not None:
+            return getattr(self.instance, "poReference", value)
+        if _is_pdf_upload(value):
+            return value
+        raise serializers.ValidationError("Upload a PDF file only.")
+
+    def validate(self, attrs):
+        quotation = attrs.get("quotation")
+        po_received_date = attrs.get("poReceivedDate")
+        expected_date = attrs.get("expectedDate")
+        errors = {}
+
+        if self.instance is not None:
+            current_quotation = getattr(self.instance, "quotation", None)
+            if quotation is None:
+                quotation = current_quotation
+                attrs["quotation"] = current_quotation
+            elif current_quotation is not None and quotation.id != current_quotation.id:
+                errors["quotationId"] = "Quotation cannot be changed for an existing purchase order."
+
+        if quotation is None:
+            errors["quotationId"] = "Select a quotation."
+        else:
+            if quotation.get_overall_status() != Quotation.APPROVAL_APPROVED:
+                errors["quotationId"] = (
+                    "Purchase order can be created only for fully approved quotations."
+                )
+            elif quotation.clientStatus != Quotation.CLIENT_STATUS_ACCEPTED:
+                errors["quotationId"] = (
+                    "Purchase order can be created only for client-accepted quotations."
+                )
+            elif (
+                hasattr(quotation, "purchaseOrder")
+                and getattr(quotation.purchaseOrder, "id", None) != getattr(self.instance, "id", None)
+            ):
+                errors["quotationId"] = "A purchase order already exists for the selected quotation."
+
+        if po_received_date is not None and expected_date is not None and expected_date < po_received_date:
+            errors["expectedDate"] = "Expected date cannot be before the PO received date."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return attrs
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        file_url = getattr(getattr(instance, "poReference", None), "url", "")
+        request = self.context.get("request")
+
+        if file_url:
+            representation["poReference"] = (
+                request.build_absolute_uri(file_url) if request is not None else file_url
+            )
+        else:
+            representation["poReference"] = ""
+
+        return representation
+
+    def get_hasJobCard(self, obj):
+        return hasattr(obj, "jobCard")
+
+    def get_jobCardId(self, obj):
+        job_card = getattr(obj, "jobCard", None)
+        return job_card.id if job_card is not None else None
+
+    def get_jobCardNo(self, obj):
+        job_card = getattr(obj, "jobCard", None)
+        return job_card.jobCardNo if job_card is not None else ""
+
+
+class JobCardSerializer(serializers.ModelSerializer):
+    purchaseOrderId = serializers.PrimaryKeyRelatedField(
+        queryset=PurchaseOrder.objects.select_related("quotation__salesServiceRequest"),
+        source="purchaseOrder",
+        write_only=True,
+        required=False,
+    )
+    quotationId = serializers.PrimaryKeyRelatedField(
+        queryset=Quotation.objects.select_related("salesServiceRequest", "costEstimationSheet"),
+        source="quotation",
+        write_only=True,
+        required=False,
+    )
+    purchaseOrderNo = serializers.SerializerMethodField()
+    poDate = serializers.SerializerMethodField()
+    quotationCode = serializers.SerializerMethodField()
+    rfqNo = serializers.SerializerMethodField()
+    rfqDate = serializers.SerializerMethodField()
+    rfqType = serializers.SerializerMethodField()
+    rfqTypeLabel = serializers.SerializerMethodField()
+    rfqCategory = serializers.SerializerMethodField()
+    rfqCategoryLabel = serializers.SerializerMethodField()
+    planningType = serializers.SerializerMethodField()
+    planningTypeLabel = serializers.SerializerMethodField()
+    planStartDate = serializers.SerializerMethodField()
+    planEndDate = serializers.SerializerMethodField()
+    attentionName = serializers.SerializerMethodField()
+    companyName = serializers.SerializerMethodField()
+    scopeDetails = serializers.SerializerMethodField()
+    materials = serializers.SerializerMethodField()
+    services = serializers.SerializerMethodField()
+    requiresStoreManagerApproval = serializers.SerializerMethodField()
+    hasOperationRegister = serializers.SerializerMethodField()
+    operationRegisterId = serializers.SerializerMethodField()
+
+    class Meta:
+        model = JobCard
+        fields = (
+            "id",
+            "purchaseOrderId",
+            "purchaseOrder",
+            "quotationId",
+            "quotation",
+            "purchaseOrderNo",
+            "poDate",
+            "quotationCode",
+            "rfqNo",
+            "rfqDate",
+            "rfqType",
+            "rfqTypeLabel",
+            "rfqCategory",
+            "rfqCategoryLabel",
+            "planningType",
+            "planningTypeLabel",
+            "planStartDate",
+            "planEndDate",
+            "attentionName",
+            "companyName",
+            "scopeDetails",
+            "materials",
+            "services",
+            "jobCardNo",
+            "jobCardDate",
+            "planningDate",
+            "expectedDate",
+            "remarks",
+            "deliveryRemark",
+            "grnNo",
+            "sentToStoreManager",
+            "storeManagerApproved",
+            "storeManagerComment",
+            "sentToHod",
+            "requiresStoreManagerApproval",
+            "hasOperationRegister",
+            "operationRegisterId",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "purchaseOrder",
+            "quotation",
+            "purchaseOrderNo",
+            "poDate",
+            "quotationCode",
+            "rfqNo",
+            "rfqDate",
+            "rfqType",
+            "rfqTypeLabel",
+            "rfqCategory",
+            "rfqCategoryLabel",
+            "planningType",
+            "planningTypeLabel",
+            "planStartDate",
+            "planEndDate",
+            "attentionName",
+            "companyName",
+            "scopeDetails",
+            "materials",
+            "services",
+            "jobCardNo",
+            "grnNo",
+            "sentToStoreManager",
+            "storeManagerApproved",
+            "storeManagerComment",
+            "sentToHod",
+            "requiresStoreManagerApproval",
+            "hasOperationRegister",
+            "operationRegisterId",
+            "created_at",
+            "updated_at",
+        )
+
+    def validate(self, attrs):
+        purchase_order = attrs.get("purchaseOrder")
+        quotation = attrs.get("quotation")
+        job_card_date = attrs.get("jobCardDate")
+        planning_date = attrs.get("planningDate")
+        expected_date = attrs.get("expectedDate")
+        errors = {}
+
+        if self.instance is not None:
+            current_purchase_order = getattr(self.instance, "purchaseOrder", None)
+            current_quotation = getattr(self.instance, "quotation", None)
+            if purchase_order is None:
+                purchase_order = current_purchase_order
+                attrs["purchaseOrder"] = current_purchase_order
+            elif current_purchase_order is not None and purchase_order.id != current_purchase_order.id:
+                errors["purchaseOrderId"] = "Purchase order cannot be changed for an existing job card."
+
+            if quotation is None:
+                quotation = current_quotation
+                attrs["quotation"] = current_quotation
+            elif current_quotation is not None and quotation.id != current_quotation.id:
+                errors["quotationId"] = "Quotation cannot be changed for an existing job card."
+
+            if job_card_date is None:
+                job_card_date = getattr(self.instance, "jobCardDate", None)
+            if planning_date is None:
+                planning_date = getattr(self.instance, "planningDate", None)
+            if expected_date is None:
+                expected_date = getattr(self.instance, "expectedDate", None)
+
+        if purchase_order is not None and quotation is not None:
+            errors["quotationId"] = "Open a job card from either a purchase order or a direct quotation."
+
+        if purchase_order is None and quotation is None:
+            errors["purchaseOrderId"] = "Select a purchase order."
+
+        if purchase_order is not None and (
+            hasattr(purchase_order, "jobCard")
+            and getattr(purchase_order.jobCard, "id", None) != getattr(self.instance, "id", None)
+        ):
+            errors["purchaseOrderId"] = "A job card already exists for the selected purchase order."
+
+        if quotation is not None:
+            if not quotation.uses_direct_job_card_flow():
+                errors["quotationId"] = (
+                    "Only quote of assessment and quote of completion quotations can open a job card without a purchase order."
+                )
+            elif quotation.get_overall_status() != Quotation.APPROVAL_APPROVED:
+                errors["quotationId"] = (
+                    "Direct job cards are available only after the quotation is fully approved."
+                )
+            elif (
+                hasattr(quotation, "jobCard")
+                and getattr(quotation.jobCard, "id", None) != getattr(self.instance, "id", None)
+            ):
+                errors["quotationId"] = "A job card already exists for the selected quotation."
+
+        if job_card_date is None:
+            errors["jobCardDate"] = "Job card date is required."
+
+        if planning_date is None:
+            errors["planningDate"] = "Planning date is required."
+
+        if expected_date is None:
+            errors["expectedDate"] = "Expected date is required."
+        elif planning_date is not None and expected_date < planning_date:
+            errors["expectedDate"] = "Expected date cannot be before the planning date."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return attrs
+
+    def _get_source_purchase_order(self, obj):
+        return getattr(obj, "purchaseOrder", None)
+
+    def _get_source_quotation(self, obj):
+        quotation = getattr(obj, "quotation", None)
+        if quotation is not None:
+            return quotation
+
+        purchase_order = self._get_source_purchase_order(obj)
+        if purchase_order is None:
+            return None
+
+        return getattr(purchase_order, "quotation", None)
+
+    def _get_source_request_item(self, obj):
+        quotation = self._get_source_quotation(obj)
+        if quotation is None:
+            return None
+        return getattr(quotation, "salesServiceRequest", None)
+
+    def get_purchaseOrderNo(self, obj):
+        purchase_order = self._get_source_purchase_order(obj)
+        return getattr(purchase_order, "purchaseOrderNo", "") or ""
+
+    def get_poDate(self, obj):
+        purchase_order = self._get_source_purchase_order(obj)
+        po_date = getattr(purchase_order, "poDate", None)
+        return po_date.isoformat() if po_date else ""
+
+    def get_quotationCode(self, obj):
+        quotation = self._get_source_quotation(obj)
+        return getattr(quotation, "quotationCode", "") or ""
+
+    def get_rfqNo(self, obj):
+        request_item = self._get_source_request_item(obj)
+        return getattr(request_item, "referenceNo", "") or ""
+
+    def get_rfqDate(self, obj):
+        request_item = self._get_source_request_item(obj)
+        request_date = getattr(request_item, "requestDate", None)
+        return request_date.isoformat() if request_date else ""
+
+    def get_rfqType(self, obj):
+        request_item = self._get_source_request_item(obj)
+        return getattr(request_item, "rfqType", "") or ""
+
+    def get_rfqTypeLabel(self, obj):
+        request_item = self._get_source_request_item(obj)
+        if request_item is None:
+            return ""
+        return request_item.get_rfqType_display() or ""
+
+    def get_rfqCategory(self, obj):
+        request_item = self._get_source_request_item(obj)
+        return getattr(request_item, "rfqCategory", "") or ""
+
+    def get_rfqCategoryLabel(self, obj):
+        request_item = self._get_source_request_item(obj)
+        if request_item is None:
+            return ""
+        return request_item.get_rfqCategory_display() or ""
+
+    def get_planningType(self, obj):
+        request_item = self._get_source_request_item(obj)
+        return getattr(request_item, "planningType", "") or ""
+
+    def get_planningTypeLabel(self, obj):
+        request_item = self._get_source_request_item(obj)
+        if request_item is None:
+            return ""
+        return request_item.get_planningType_display() or ""
+
+    def get_planStartDate(self, obj):
+        request_item = self._get_source_request_item(obj)
+        plan_start_date = getattr(request_item, "planStartDate", None)
+        return plan_start_date.isoformat() if plan_start_date else ""
+
+    def get_planEndDate(self, obj):
+        request_item = self._get_source_request_item(obj)
+        plan_end_date = getattr(request_item, "planEndDate", None)
+        return plan_end_date.isoformat() if plan_end_date else ""
+
+    def get_attentionName(self, obj):
+        quotation = self._get_source_quotation(obj)
+        return getattr(quotation, "attentionName", "") or ""
+
+    def get_companyName(self, obj):
+        quotation = self._get_source_quotation(obj)
+        return getattr(quotation, "companyName", "") or ""
+
+    def get_scopeDetails(self, obj):
+        return _build_job_card_scope_details(obj)
+
+    def get_materials(self, obj):
+        return _build_job_card_materials(obj)
+
+    def get_services(self, obj):
+        return _build_job_card_services(obj)
+
+    def get_requiresStoreManagerApproval(self, obj):
+        return _job_card_requires_store_manager_approval(obj)
+
+    def get_hasOperationRegister(self, obj):
+        return hasattr(obj, "operationRegister")
+
+    def get_operationRegisterId(self, obj):
+        operation_register = getattr(obj, "operationRegister", None)
+        return operation_register.id if operation_register is not None else None
+
+
+class OperationRegisterSerializer(serializers.ModelSerializer):
+    jobCardId = serializers.PrimaryKeyRelatedField(
+        queryset=JobCard.objects.select_related(
+            "purchaseOrder",
+            "purchaseOrder__quotation",
+            "purchaseOrder__quotation__salesServiceRequest",
+            "quotation",
+            "quotation__salesServiceRequest",
+        ),
+        source="jobCard",
+        write_only=True,
+        required=False,
+    )
+    jobCardNo = serializers.CharField(source="jobCard.jobCardNo", read_only=True)
+    grnNo = serializers.CharField(source="jobCard.grnNo", read_only=True)
+    rfqNo = serializers.SerializerMethodField()
+    rfqDate = serializers.SerializerMethodField()
+    attentionName = serializers.SerializerMethodField()
+    companyName = serializers.SerializerMethodField()
+    purchaseOrderNo = serializers.SerializerMethodField()
+    poDate = serializers.SerializerMethodField()
+    planningType = serializers.SerializerMethodField()
+    planningTypeLabel = serializers.SerializerMethodField()
+    planStartDate = serializers.SerializerMethodField()
+    planEndDate = serializers.SerializerMethodField()
+    shopFloorInchargeLabel = serializers.SerializerMethodField()
+    scopeDetails = serializers.SerializerMethodField()
+    services = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OperationRegister
+        fields = (
+            "id",
+            "jobCardId",
+            "jobCard",
+            "jobCardNo",
+            "grnNo",
+            "operationNo",
+            "opDate",
+            "rfqNo",
+            "rfqDate",
+            "attentionName",
+            "companyName",
+            "purchaseOrderNo",
+            "poDate",
+            "planningType",
+            "planningTypeLabel",
+            "planStartDate",
+            "planEndDate",
+            "shopFloorIncharge",
+            "shopFloorInchargeLabel",
+            "scopeDetails",
+            "services",
+            "remarks",
+            "assignedToSiteEngineer",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "jobCard",
+            "jobCardNo",
+            "grnNo",
+            "operationNo",
+            "opDate",
+            "rfqNo",
+            "rfqDate",
+            "attentionName",
+            "companyName",
+            "purchaseOrderNo",
+            "poDate",
+            "planningType",
+            "planningTypeLabel",
+            "planStartDate",
+            "planEndDate",
+            "shopFloorInchargeLabel",
+            "scopeDetails",
+            "services",
+            "assignedToSiteEngineer",
+            "created_at",
+            "updated_at",
+        )
+
+    def validate(self, attrs):
+        job_card = attrs.get("jobCard")
+        errors = {}
+
+        if self.instance is not None:
+            current_job_card = getattr(self.instance, "jobCard", None)
+            if job_card is None:
+                job_card = current_job_card
+                attrs["jobCard"] = current_job_card
+            elif current_job_card is not None and job_card.id != current_job_card.id:
+                errors["jobCardId"] = "Job card cannot be changed for an existing operation register."
+
+        if job_card is None:
+            errors["jobCardId"] = "Select a job card."
+        else:
+            if not job_card.sentToHod:
+                errors["jobCardId"] = "Operation register is available only after notifying HOD."
+            elif (
+                self.instance is None
+                and hasattr(job_card, "operationRegister")
+            ):
+                errors["jobCardId"] = "An operation register already exists for the selected job card."
+
+        if not str(attrs.get("shopFloorIncharge", getattr(self.instance, "shopFloorIncharge", "")) or "").strip():
+            errors["shopFloorIncharge"] = "Select the shop floor incharge."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return attrs
+
+    def _get_request_item(self, obj):
+        return _get_job_card_source_request_item(getattr(obj, "jobCard", None))
+
+    def _get_purchase_order(self, obj):
+        return _get_job_card_source_purchase_order(getattr(obj, "jobCard", None))
+
+    def _get_quotation(self, obj):
+        return _get_job_card_source_quotation(getattr(obj, "jobCard", None))
+
+    def get_rfqNo(self, obj):
+        request_item = self._get_request_item(obj)
+        return getattr(request_item, "referenceNo", "") or ""
+
+    def get_rfqDate(self, obj):
+        request_item = self._get_request_item(obj)
+        request_date = getattr(request_item, "requestDate", None)
+        return request_date.isoformat() if request_date else ""
+
+    def get_attentionName(self, obj):
+        quotation = self._get_quotation(obj)
+        return getattr(quotation, "attentionName", "") or ""
+
+    def get_companyName(self, obj):
+        quotation = self._get_quotation(obj)
+        return getattr(quotation, "companyName", "") or ""
+
+    def get_purchaseOrderNo(self, obj):
+        purchase_order = self._get_purchase_order(obj)
+        return getattr(purchase_order, "purchaseOrderNo", "") or ""
+
+    def get_poDate(self, obj):
+        purchase_order = self._get_purchase_order(obj)
+        po_date = getattr(purchase_order, "poDate", None)
+        return po_date.isoformat() if po_date else ""
+
+    def get_planningType(self, obj):
+        request_item = self._get_request_item(obj)
+        return getattr(request_item, "planningType", "") or ""
+
+    def get_planningTypeLabel(self, obj):
+        request_item = self._get_request_item(obj)
+        if request_item is None:
+            return ""
+        return request_item.get_planningType_display() or ""
+
+    def get_planStartDate(self, obj):
+        request_item = self._get_request_item(obj)
+        plan_start_date = getattr(request_item, "planStartDate", None)
+        return plan_start_date.isoformat() if plan_start_date else ""
+
+    def get_planEndDate(self, obj):
+        request_item = self._get_request_item(obj)
+        plan_end_date = getattr(request_item, "planEndDate", None)
+        return plan_end_date.isoformat() if plan_end_date else ""
+
+    def get_shopFloorInchargeLabel(self, obj):
+        return obj.get_shopFloorIncharge_display() or ""
+
+    def get_scopeDetails(self, obj):
+        return _build_job_card_scope_lines(getattr(obj, "jobCard", None))
+
+    def get_services(self, obj):
+        return _build_job_card_services(getattr(obj, "jobCard", None))
 
 
 class CostEstimationRateSerializer(serializers.ModelSerializer):
@@ -961,6 +1910,18 @@ class CostEstimationSheetSerializer(serializers.ModelSerializer):
 
         if sales_service_request is None:
             return attrs
+
+        if (
+            sales_service_request.rfqCategory
+            != SalesServiceRequest.RFQ_CATEGORY_STANDARD
+        ):
+            raise serializers.ValidationError(
+                {
+                    "salesServiceRequestId": [
+                        "Cost estimation is available only for standard RFQs."
+                    ]
+                }
+            )
 
         existing_sheets = CostEstimationSheet.objects.filter(
             salesServiceRequest=sales_service_request,

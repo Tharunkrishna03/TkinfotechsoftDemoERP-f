@@ -17,6 +17,25 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _get_allowed_hosts():
+    configured_hosts = os.environ.get("DJANGO_ALLOWED_HOSTS", "")
+    if configured_hosts.strip():    
+        return [
+            host.strip()
+            for host in configured_hosts.split(",")
+            if host.strip()
+        ]
+
+    return [
+        "127.0.0.1",
+        "localhost",
+        "[::1]",
+        "0.0.0.0",
+        "host.docker.internal",
+        "testserver",
+    ]
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -26,7 +45,7 @@ SECRET_KEY = 'django-insecure-+)otfznm$!^qvu-f38l0+f54lyx#47t7mp!lu%bm=v6a_36*8-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
+ALLOWED_HOSTS = _get_allowed_hosts()
 
 
 # Application definition
@@ -130,4 +149,52 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_ADMIN_USERNAME = os.environ.get("DEFAULT_ADMIN_USERNAME", "admin")
 DEFAULT_ADMIN_PASSWORD = os.environ.get("DEFAULT_ADMIN_PASSWORD", "Admin@123")
 DEFAULT_ADMIN_EMAIL = os.environ.get("DEFAULT_ADMIN_EMAIL", "admin@example.com")
+DEFAULT_SALES_EXECUTIVE_USERNAME = os.environ.get("DEFAULT_SALES_EXECUTIVE_USERNAME", "salesexec")
+DEFAULT_SALES_EXECUTIVE_PASSWORD = os.environ.get("DEFAULT_SALES_EXECUTIVE_PASSWORD", "SalesExec@123")
+DEFAULT_SALES_EXECUTIVE_EMAIL = os.environ.get("DEFAULT_SALES_EXECUTIVE_EMAIL", "salesexec@example.com")
+DEFAULT_LEAD_SALES_USERNAME = os.environ.get("DEFAULT_LEAD_SALES_USERNAME", "leadsales")
+DEFAULT_LEAD_SALES_PASSWORD = os.environ.get("DEFAULT_LEAD_SALES_PASSWORD", "LeadSales@123")
+DEFAULT_LEAD_SALES_EMAIL = os.environ.get("DEFAULT_LEAD_SALES_EMAIL", "leadsales@example.com")
+DEFAULT_HOD_USERNAME = os.environ.get("DEFAULT_HOD_USERNAME", "hod")
+DEFAULT_HOD_PASSWORD = os.environ.get("DEFAULT_HOD_PASSWORD", "Hod@12345")
+DEFAULT_HOD_EMAIL = os.environ.get("DEFAULT_HOD_EMAIL", "hod@example.com")
+DEFAULT_MD_USERNAME = os.environ.get("DEFAULT_MD_USERNAME", "md")
+DEFAULT_MD_PASSWORD = os.environ.get("DEFAULT_MD_PASSWORD", "Md@12345")
+DEFAULT_MD_EMAIL = os.environ.get("DEFAULT_MD_EMAIL", "md@example.com")
+DEFAULT_DOCUMENT_CONTROLLER_USERNAME = os.environ.get(
+    "DEFAULT_DOCUMENT_CONTROLLER_USERNAME",
+    "documentcontroller",
+)
+DEFAULT_DOCUMENT_CONTROLLER_PASSWORD = os.environ.get(
+    "DEFAULT_DOCUMENT_CONTROLLER_PASSWORD",
+    "DocumentController@123",
+)
+DEFAULT_DOCUMENT_CONTROLLER_EMAIL = os.environ.get(
+    "DEFAULT_DOCUMENT_CONTROLLER_EMAIL",
+    "documentcontroller@example.com",
+)
+DEFAULT_OPERATION_HEAD_USERNAME = os.environ.get(
+    "DEFAULT_OPERATION_HEAD_USERNAME",
+    "storemanager",
+)
+DEFAULT_OPERATION_HEAD_PASSWORD = os.environ.get(
+    "DEFAULT_OPERATION_HEAD_PASSWORD",
+    "StoreManager@123",
+)
+DEFAULT_OPERATION_HEAD_EMAIL = os.environ.get(
+    "DEFAULT_OPERATION_HEAD_EMAIL",
+    "storemanager@example.com",
+)
+DEFAULT_SITE_ENGINEER_USERNAME = os.environ.get(
+    "DEFAULT_SITE_ENGINEER_USERNAME",
+    "siteengineer",
+)
+DEFAULT_SITE_ENGINEER_PASSWORD = os.environ.get(
+    "DEFAULT_SITE_ENGINEER_PASSWORD",
+    "SiteEngineer@123",
+)
+DEFAULT_SITE_ENGINEER_EMAIL = os.environ.get(
+    "DEFAULT_SITE_ENGINEER_EMAIL",
+    "siteengineer@example.com",
+)
 ADMIN_AUTH_MAX_AGE = int(os.environ.get("ADMIN_AUTH_MAX_AGE", "43200"))
