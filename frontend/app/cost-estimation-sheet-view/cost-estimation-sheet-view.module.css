@@ -1,0 +1,368 @@
+.contentArea {
+  flex: 1;
+  min-width: 0;
+  padding: 20px;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #6c6c6d;
+  border-radius: 18px;
+  padding: 22px 26px 28px;
+  transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.pageTitle,
+.cardHeader h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--page-heading-text);
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-left: 2px solid var(--page-heading-border);
+  border-radius: var(--page-heading-radius);
+  background: var(--page-heading-bg);
+}
+
+.cardsStack {
+  display: grid;
+  gap: 22px;
+}
+
+.sectionCard {
+  padding: 18px;
+  border: 1px solid #dce4ef;
+  border-radius: 18px;
+  transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #000000;
+}
+
+.sectionTitleRow {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #000000;
+}
+
+.sectionTitleRow .sectionTitle {
+  margin: 0;
+}
+
+.sectionTitle {
+  margin: 0 0 16px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--page-heading-text);
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-left: 2px solid var(--page-heading-border);
+  border-radius: var(--page-heading-radius);
+  background: var(--page-heading-bg);
+}
+
+.sectionHeader .sectionTitle {
+  margin: 0;
+}
+
+.totalBadge {
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: rgba(103, 212, 255, 0.12);
+  border: 1px solid rgba(103, 212, 255, 0.45);
+  color: #154a77;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sectionGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px 18px;
+}
+
+.fieldColumn {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: #1f2a3d;
+}
+
+.fieldInput {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6.5px 9px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  font-size: 12px;
+  text-align: left;
+  border-left: 1px solid rgb(0, 234, 255);
+  background: #ffffff;
+  color: #111827;
+}
+
+.fieldInputMuted {
+  background: #eceff3;
+}
+
+.tableShell {
+  overflow: hidden;
+  border: 1px solid rgba(103, 212, 255, 0.45);
+  border-radius: 18px;
+  background: #fdfefe;
+}
+
+.tableWrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 12px 10px;
+  border: 1px solid #d7e0ea;
+   font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.table th {
+  font-weight: 500;
+  color: #13263b;
+  background: linear-gradient(180deg, #fbfdff 0%, #f2f6fb 100%);
+  white-space: nowrap;
+}
+
+.table td {
+  color: #172a40;
+  vertical-align: middle;
+}
+
+.table tbody tr:hover td {
+  background: rgba(111, 217, 255, 0.08);
+}
+
+.amountCell {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.errorBanner {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(231, 84, 128, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 78, 124, 0.08);
+  color: #b42355;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.loadingState,
+.emptyStateCard {
+  min-height: 180px;
+  border: 1px dashed rgba(103, 212, 255, 0.45);
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #5f6f84;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.summarySectionWrap {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.summarySectionCard {
+  width: min(100%, 460px);
+  padding: 24px 26px;
+}
+
+.summaryHeadingRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.summaryTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f2340;
+}
+
+.summaryMeta {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.summaryList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.summaryItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 13px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  font-size: 12px;
+}
+
+.summaryItem:last-child {
+  border-bottom: none;
+}
+
+.summaryItem span:last-child {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.summaryItemEmphasis {
+  font-weight: 500;
+  background: #f8fafc;
+}
+
+.actionRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.editButton,
+.deleteButton {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.editButton {
+  border: 1px solid blue;
+  color: blue;
+}
+
+.deleteButton {
+  border: 1px solid red;
+  color: red;
+}
+
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(-4px);
+    border-color: #cfd7e3;
+    box-shadow: 0 18px 34px rgba(15, 23, 42, 0.1);
+  }
+
+  .sectionCard:hover {
+    transform: translateY(-4px);
+    border-color: #696c70;
+    box-shadow: 0 14px 28px rgba(107, 114, 128, 0.3);
+  }
+}
+
+@media (max-width: 992px) {
+  .sectionGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sectionHeader,
+  .summaryHeadingRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .summarySectionWrap {
+    justify-content: stretch;
+  }
+
+  .summarySectionCard {
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .contentArea {
+    padding: 14px;
+  }
+
+  .card {
+    padding: 18px;
+  }
+}
+
+@media (max-width: 576px) {
+  .sectionGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .table {
+    min-width: 620px;
+  }
+
+  .summaryItem {
+    padding: 12px 14px;
+  }
+
+  .summaryItem span:last-child {
+    white-space: normal;
+    text-align: right;
+  }
+
+  .actionRow {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}

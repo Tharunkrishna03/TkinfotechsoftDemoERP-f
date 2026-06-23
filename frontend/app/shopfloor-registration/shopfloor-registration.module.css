@@ -1,0 +1,102 @@
+.pageStack {
+  display: flex;
+  flex-direction: column;
+}
+
+.pageStack > :last-child {
+  margin-bottom: 0;
+}
+
+.compactCardGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.compactCard {
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px solid rgba(129, 153, 185, 0.35);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fbfdff 0%, #eef6ff 100%);
+  color: #1f2a3d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cardHeaderRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cardTitle {
+  margin-bottom: 0 !important;
+  flex: 1;
+}
+
+.cardHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.savedStatus {
+  font-size: 11px;
+  font-weight: 700;
+  color: #15803d;
+  white-space: nowrap;
+}
+
+.sectionSaveButton {
+  border: 1px solid #16a34a;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #16a34a;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sectionSaveButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.processFieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+@media (max-width: 1100px) {
+  .compactCardGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .cardHeaderRow,
+  .cardHeaderActions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .compactCardGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .processFieldGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .compactCard {
+    min-height: 48px;
+  }
+}

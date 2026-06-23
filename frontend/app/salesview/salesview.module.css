@@ -1,0 +1,486 @@
+
+
+
+.container {
+  display: flex;
+  font-family: var(--app-font);
+  font-size: 12px;
+  background: #f5f5f5;
+  min-height: 100vh;
+  padding-left: var(--admin-sidebar-width);
+  color: black;
+  list-style-type: none;
+}
+
+.sidebar {
+  list-style-type: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--admin-sidebar-width);
+  height: 100vh;
+  overflow-y: auto;
+  background: whitesmoke;
+  color: black;
+  padding: 20px;
+  border-radius: 1px;
+  z-index: 20;
+}
+.sidebar a {
+  text-decoration: none;   
+  color: rgb(0, 0, 0);      
+  display: block;
+
+}
+
+.sidebar a:hover {
+    
+  color: #000000;
+  border-radius: 5px;
+}
+
+.logo {
+  margin-bottom: 30px;
+}
+
+.sidebar ul {
+   list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar li {
+  list-style-type: none;
+  padding: 10px;
+  margin-bottom: 8px;
+  background: whitesmoke;
+  border-radius: 25px;
+  cursor: pointer;
+  color: black;
+  transition: all 0.3s;
+}
+
+
+
+.main{
+  flex:1;
+  padding:20px;
+  color:black;
+  background: white;
+  min-height: 100vh;
+}
+
+.contentArea {
+  flex: 1;
+  min-width: 0;
+}
+
+.card {
+  min-width: 0;
+  box-shadow: 0px 0.2px 0px 0.2px rgb(138, 148, 149);
+  padding: 25px;
+  border-radius: 15px;
+  margin-bottom: 30px;
+  transition: transform 0.24s ease, box-shadow 0.24s ease;
+}
+
+.title {
+  margin: 0 0 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #000000;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+}
+
+.filterGroup {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: 1 1 460px;
+}
+
+.headerButtons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.control {
+  width: min(100%, 200px);
+  min-width: 140px;
+}
+
+.compactControl {
+  width: 100px;
+  min-width: 100px;
+}
+
+.tableShell {
+  overflow-x: auto;
+}
+
+.table {
+  min-width: 720px;
+}
+
+.addButton,
+.secondaryButton,
+.pagerButton {
+  border: none;
+  border-radius: 25px;
+  padding: 6px 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.addButton {
+  background: rgb(75, 147, 105);
+  color: white;
+}
+
+.secondaryButton,
+.pagerButton {
+  background: #ffffff;
+  color: #2563eb;
+  border: 1px solid #2563eb;
+}
+
+.pagerButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.paginationRow {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.paginationInfo {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 18px 34px rgba(15, 23, 42, 0.14);
+  }
+}
+
+.addBtn {
+  padding: 3px;
+  height: 30px;
+  width: 60px;
+  background-color: green;
+  border-radius: 5px;
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.addBtn:hover {
+  background-color: #0056c1;
+}
+
+
+.field {
+  display: flex;
+  flex-direction: column;
+  grid-column: span 2;
+  margin-bottom: 15px;
+}
+
+.card label {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 5px;
+}
+
+
+
+
+.amountRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.amountRow input {
+  width: 150px;
+}
+
+.card table {
+  grid-column: 1 / -1;
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.card th,
+.card td {
+  border: 1px solid rgb(179, 184, 186,0.5);
+   font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0px 0.2px 0px 0.2px rgb(0, 234, 255);
+  padding: 10px;
+  text-align: center;
+}
+
+.card td:last-child {
+  text-align: right;
+}
+
+.card tr:hover {
+  background: #f9f9f9;
+}
+
+
+.card hr {
+  grid-column: 1 / -1;
+  margin: 20px 0;
+}
+
+:global(.Toastify__toast-container) {
+  width: min(360px, calc(100vw - 24px));
+}
+
+:global(.Toastify__toast) {
+  min-height: 64px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  color: #122033;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(12px);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+:global(.Toastify__toast-body) {
+  margin: 0;
+  padding: 0;
+  gap: 12px;
+  align-items: center;
+}
+
+:global(.Toastify__toast-icon) {
+  margin-inline-end: 10px;
+}
+
+:global(.Toastify__close-button) {
+  color: #475569;
+  opacity: 0.72;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+:global(.Toastify__close-button:hover) {
+  opacity: 1;
+  transform: scale(1.05);
+}
+
+:global(.Toastify__progress-bar) {
+  height: 4px;
+  opacity: 1;
+  background: linear-gradient(90deg, #2563eb 0%, #38bdf8 100%);
+}
+
+:global(.Toastify__toast--success) {
+  border-color: rgba(22, 163, 74, 0.18);
+  background: linear-gradient(135deg, #ecfdf3 0%, #dff7e8 100%);
+  color: #14532d;
+  box-shadow: 0 18px 40px rgba(22, 163, 74, 0.16);
+}
+
+:global(.Toastify__toast--success .Toastify__toast-icon) {
+  color: #16a34a;
+}
+
+:global(.Toastify__toast--success .Toastify__progress-bar) {
+  background: linear-gradient(90deg, #16a34a 0%, #34d399 100%);
+}
+
+:global(.Toastify__toast--error) {
+  border-color: rgba(220, 38, 38, 0.16);
+  background: linear-gradient(135deg, #fff1f2 0%, #ffe2e2 100%);
+  color: #991b1b;
+  box-shadow: 0 18px 40px rgba(220, 38, 38, 0.14);
+}
+
+:global(.Toastify__toast--error .Toastify__toast-icon) {
+  color: #dc2626;
+}
+
+:global(.Toastify__toast--error .Toastify__progress-bar) {
+  background: linear-gradient(90deg, #dc2626 0%, #fb7185 100%);
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 500;
+}
+
+.field input,
+.field textarea,
+.field select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 25px;
+  font-size: 12px;
+  text-align: left;
+  border-left:1px solid rgb(0, 234, 255);
+  
+}
+.edit{
+  border: 1px solid blue;
+  background-color: white;
+  color:blue;
+  padding: 4px;
+}
+.delete{
+  border: 1px solid red;
+  background-color: white;
+  color:red;
+  padding: 4px;
+}
+
+
+.list-group-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.list-group-item.fw-bold {
+  font-weight: bold;
+}
+
+
+@media (max-width: 992px) {
+  .amountRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .amountRow input {
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .contentArea {
+    padding: 14px;
+  }
+
+  .card {
+    padding: 18px;
+  }
+
+  .filterGroup,
+  .headerButtons {
+    width: 100%;
+  }
+
+  .control,
+  .compactControl {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .paginationRow {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 576px) {
+  .card {
+    padding: 18px 14px;
+  }
+
+  .amountRow {
+    flex-direction: column;
+  }
+
+  .addButton,
+  .secondaryButton,
+  .pagerButton {
+    width: 100%;
+  }
+}
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #print-area, #print-area * {
+    visibility: visible;
+  }
+
+  #print-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+
+  #preview-area, #preview-area * {
+    visibility: visible;
+  }
+
+  #preview-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 210mm;
+    padding: 20mm;
+  }
+}
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5); /* dark background */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modalBox {
+  background: #fff;
+  padding: 20px;
+  width: 400px;
+  max-width: 90%;
+  border-radius: 10px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.3);
+}

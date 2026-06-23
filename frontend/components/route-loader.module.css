@@ -1,0 +1,64 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  opacity: 0;
+  animation: reveal 0s linear var(--route-loader-delay, 250ms) forwards;
+}
+
+.dotGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #0f5f9a;
+  animation: wave 1s ease-in-out infinite;
+}
+
+.dot:nth-child(2) {
+  background: #1678c1;
+  animation-delay: 0.1s;
+}
+
+.dot:nth-child(3) {
+  background: #1f8fe4;
+  animation-delay: 0.2s;
+}
+
+.dot:nth-child(4) {
+  background: #42a5f5;
+  animation-delay: 0.3s;
+}
+
+.dot:nth-child(5) {
+  background: #67b2ee;
+  animation-delay: 0.4s;
+}
+
+@keyframes wave {
+  0%,
+  100% {
+    transform: translateY(8px) scale(0.88);
+    opacity: 0.7;
+  }
+
+  50% {
+    transform: translateY(-8px) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes reveal {
+  to {
+    opacity: 1;
+  }
+}
