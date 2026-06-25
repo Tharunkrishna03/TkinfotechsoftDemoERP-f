@@ -452,7 +452,7 @@ export default function AdminShell({ children }) {
       >
         <div className={styles.brand}>
           <div className={styles.brandText}>
-            <img src="/logotk.png" className={styles.brandLogo} alt="TK Powers" />
+            <img src="/logo.png" className={styles.brandLogo} alt="TK Powers" />
           </div>
         </div>
 
