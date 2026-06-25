@@ -1,5 +1,12 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Poppins", sans-serif;
+}
+
 :root {
-  --app-font: "Poppins", "Segoe UI", sans-serif;
+  --app-font: "Poppins", sans-serif;
   --app-background: #f6f8fb;
   --admin-sidebar-width: 290px;
   --shell-surface: #ffffff;
