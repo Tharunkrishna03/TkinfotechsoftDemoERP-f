@@ -328,6 +328,7 @@ def _build_admin_user_payload(user):
         "username": user.get_username(),
         "isStaff": user.is_staff,
         "isSuperuser": user.is_superuser,
+        "isActive": user.is_active,
         "roles": roles,
         "primaryRole": roles[0] if roles else "",
     }
@@ -3965,3 +3966,111 @@ def verify_admin(request):
         },
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(["GET", "POST"])
+def users_collection(request):
+    user, roles, error_response = _authorize_request(request, ROLE_ADMIN)
+    if error_response is not None:
+        return error_response
+
+    User = get_user_model()
+
+    if request.method == "GET":
+        users = User.objects.filter(is_superuser=False).prefetch_related("groups")
+        return Response([_build_admin_user_payload(u) for u in users] + [_build_admin_user_payload(User.objects.filter(is_superuser=True).first()) if User.objects.filter(is_superuser=True).first() else {}])
+
+    if request.method == "POST":
+        payload = _copy_request_payload(request)
+        username = str(payload.get("username") or "").strip()
+        password = str(payload.get("password") or "").strip()
+        role = str(payload.get("role") or "").strip()
+
+        if not username or not password or not role:
+            return Response(
+                {"error": "Username, password, and role are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if User.objects.filter(username=username).exists():
+            return Response(
+                {"error": "User with this username already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        group = Group.objects.filter(name=role).first()
+        if not group:
+            return Response(
+                {"error": "Invalid role specified."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            new_user = User.objects.create_user(
+                username=username,
+                password=password,
+                is_active=payload.get("isActive", True),
+            )
+            new_user.groups.add(group)
+
+        return Response(_build_admin_user_payload(new_user), status=status.HTTP_201_CREATED)
+
+
+@api_view(["PUT", "DELETE"])
+def user_detail(request, id):
+    user, roles, error_response = _authorize_request(request, ROLE_ADMIN)
+    if error_response is not None:
+        return error_response
+
+    User = get_user_model()
+    target_user = get_object_or_404(User, id=id)
+
+    if request.method == "DELETE":
+        if target_user.is_superuser or target_user == user:
+            return Response(
+                {"error": "Cannot delete this user."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        target_user.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    if request.method == "PUT":
+        if target_user.is_superuser and target_user != user:
+            return Response(
+                {"error": "Cannot modify another superuser."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        payload = _copy_request_payload(request)
+        username = str(payload.get("username") or "").strip()
+        password = str(payload.get("password") or "").strip()
+        role = str(payload.get("role") or "").strip()
+        is_active = payload.get("isActive")
+
+        if username and username != target_user.username:
+            if User.objects.filter(username=username).exists():
+                return Response(
+                    {"error": "Username is already taken."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            target_user.username = username
+
+        if password:
+            target_user.set_password(password)
+
+        if is_active is not None and target_user != user:
+            target_user.is_active = bool(is_active)
+
+        if role and not target_user.is_superuser:
+            group = Group.objects.filter(name=role).first()
+            if group:
+                target_user.groups.clear()
+                target_user.groups.add(group)
+            else:
+                return Response(
+                    {"error": "Invalid role specified."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        target_user.save()
+        return Response(_build_admin_user_payload(target_user))

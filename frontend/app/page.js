@@ -69,7 +69,7 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
+    <main className="min-h-screen flex flex-col items-center justify-center bg-white">
       <style>{`
         @keyframes slideUpFade {
           0% { opacity: 0; transform: translateY(30px) scale(0.98); }

@@ -212,6 +212,7 @@ const JOB_CARD_QUICK_LINK_ITEMS = [
 const ADMIN_QUICK_LINK_ITEMS = [...SALES_SERVICE_ROOT_QUICK_LINK_ITEMS, ...JOB_CARD_QUICK_LINK_ITEMS];
 
 function matchesPath(pathname, item) {
+  if (!pathname) return false;
   return item.matches.some((matchPath) => pathname === matchPath || pathname.startsWith(`${matchPath}/`));
 }
 
@@ -311,6 +312,22 @@ export default function AdminShell({ children }) {
 
   useEffect(() => {
     setStoredAuth(getStoredAdminAuth());
+
+    const handleResizeObserverError = (e) => {
+      if (
+        e.message === "ResizeObserver loop limit exceeded" ||
+        e.message === "ResizeObserver loop completed with undelivered notifications."
+      ) {
+        e.stopImmediatePropagation();
+        const overlay = document.getElementById("webpack-dev-server-client-overlay");
+        if (overlay) overlay.style.display = "none";
+      }
+    };
+
+    window.addEventListener("error", handleResizeObserverError);
+    return () => {
+      window.removeEventListener("error", handleResizeObserverError);
+    };
   }, []);
 
   useEffect(() => {
@@ -336,30 +353,44 @@ export default function AdminShell({ children }) {
       const contentHeight = contentStackElement.getBoundingClientRect().height;
       const nextHasOverflow = contentHeight > availableHeight + 1;
 
-      setHasVerticalOverflow((currentValue) =>
-        currentValue === nextHasOverflow ? currentValue : nextHasOverflow
-      );
+      setHasVerticalOverflow((currentValue) => {
+        if (currentValue === null) {
+          return nextHasOverflow;
+        }
+        
+        if (currentValue === nextHasOverflow) {
+          return currentValue;
+        }
+
+        if (currentValue === false && contentHeight < availableHeight + 80) {
+          return false;
+        }
+
+        if (currentValue === true && contentHeight > availableHeight - 80) {
+          return true;
+        }
+
+        return nextHasOverflow;
+      });
     };
 
     const scheduleMeasure = () => {
-      window.cancelAnimationFrame(animationFrameId);
-      animationFrameId = window.requestAnimationFrame(measureOverflow);
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(measureOverflow, 10);
     };
 
     scheduleMeasure();
-    timeoutId = window.setTimeout(measureOverflow, 120);
     window.addEventListener("resize", scheduleMeasure);
 
     const resizeObserver =
       typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleMeasure);
 
     if (resizeObserver) {
-      resizeObserver.observe(contentStackRef.current);
-      resizeObserver.observe(contentStackRef.current.parentElement);
+      if (contentStackRef.current) resizeObserver.observe(contentStackRef.current);
+      if (contentStackRef.current?.parentElement) resizeObserver.observe(contentStackRef.current.parentElement);
     }
 
     return () => {
-      window.cancelAnimationFrame(animationFrameId);
       window.clearTimeout(timeoutId);
       window.removeEventListener("resize", scheduleMeasure);
       resizeObserver?.disconnect();
@@ -529,9 +560,9 @@ export default function AdminShell({ children }) {
             <button type="button" className={styles.headerAction} aria-label="Billing">
               <FiCreditCard />
             </button>
-            <button type="button" className={styles.headerAction} aria-label="Links">
+            <Link href="/users" className={styles.headerAction} aria-label="Links">
               <FiLink2 />
-            </button>
+            </Link>
             <div ref={profileMenuRef} className={styles.profileMenuWrap}>
               <button
                 type="button"

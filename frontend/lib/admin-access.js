@@ -107,6 +107,7 @@ const PATH_ROLE_RULES = [
   { path: "/item", roles: [ADMIN_ROLE] },
   { path: "/itemview", roles: [ADMIN_ROLE] },
   { path: "/stock", roles: [ADMIN_ROLE] },
+  { path: "/users", roles: [ADMIN_ROLE] },
 ];
 
 function matchesPath(pathname, path) {

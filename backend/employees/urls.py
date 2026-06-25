@@ -9,6 +9,8 @@ urlpatterns = [
     path("delivery/", views.delivery, name="delivery"),
     path("api/admin-login/", views.admin_login, name="admin_login"),
     path("api/admin-verify/", views.verify_admin, name="verify_admin"),
+    path("api/users/", views.users_collection, name="users_collection"),
+    path("api/users/<int:id>/", views.user_detail, name="user_detail"),
     path("api/itemfolder/next-code/", views.itemfolder_next_code, name="itemfolder_next_code"),
     path(
         "api/sales-service/next-reference/",
